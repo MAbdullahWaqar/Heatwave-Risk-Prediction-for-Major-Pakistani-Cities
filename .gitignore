@@ -1,0 +1,15 @@
+# Datasets
+data/raw/
+data/Processed/
+
+# Models
+Models/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
