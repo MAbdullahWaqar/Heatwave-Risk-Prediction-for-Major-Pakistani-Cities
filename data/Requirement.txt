@@ -1,0 +1,9 @@
+pandas
+numpy
+scikit-learn
+imbalanced-learn    # Crucial for medical data (handling few positive cases)
+xgboost             # For the "Advanced Model" requirement
+streamlit           # For the "Web Dashboard"
+plotly              # For interactive charts
+openpyxl            # To read EPA Excel files
+joblib              # To save/load models
