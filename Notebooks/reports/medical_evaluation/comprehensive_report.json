@@ -1,0 +1,69 @@
+{
+  "summary": {},
+  "disease_analysis": {
+    "HeartDisease": {
+      "best_recall_model": "Baseline",
+      "best_recall_value": 0.8703901087188233,
+      "best_medical_model": "Baseline",
+      "best_medical_score": 0.6848608576520809,
+      "lowest_fnr": "Baseline"
+    },
+    "HeartAttack": {
+      "best_recall_model": "Baseline",
+      "best_recall_value": 0.8590618336886994,
+      "best_medical_model": "Baseline",
+      "best_medical_score": 0.6744560346103983,
+      "lowest_fnr": "Baseline"
+    },
+    "Stroke": {
+      "best_recall_model": "Baseline",
+      "best_recall_value": 0.8101582014987511,
+      "best_medical_model": "Baseline",
+      "best_medical_score": 0.6150443991584913,
+      "lowest_fnr": "Baseline"
+    },
+    "Asthma": {
+      "best_recall_model": "RandomForest",
+      "best_recall_value": 0.829410393847588,
+      "best_medical_model": "RandomForest",
+      "best_medical_score": 0.7006750048576351,
+      "lowest_fnr": "RandomForest"
+    },
+    "COPD": {
+      "best_recall_model": "Baseline",
+      "best_recall_value": 0.847257893941683,
+      "best_medical_model": "Baseline",
+      "best_medical_score": 0.686118185439541,
+      "lowest_fnr": "Baseline"
+    },
+    "Depression": {
+      "best_recall_model": "RandomForest",
+      "best_recall_value": 0.8465683494044243,
+      "best_medical_model": "RandomForest",
+      "best_medical_score": 0.7726919641229569,
+      "lowest_fnr": "RandomForest"
+    },
+    "KidneyDisease": {
+      "best_recall_model": "Baseline",
+      "best_recall_value": 0.8397530864197531,
+      "best_medical_model": "Baseline",
+      "best_medical_score": 0.6410815057101745,
+      "lowest_fnr": "Baseline"
+    },
+    "Diabetes": {
+      "best_recall_model": "Baseline",
+      "best_recall_value": 1.0,
+      "best_medical_model": "Baseline",
+      "best_medical_score": 1.0,
+      "lowest_fnr": "Baseline"
+    },
+    "Arthritis": {
+      "best_recall_model": "RandomForest",
+      "best_recall_value": 0.9355934577802683,
+      "best_medical_model": "RandomForest",
+      "best_medical_score": 0.8616054704797154,
+      "lowest_fnr": "RandomForest"
+    }
+  },
+  "recommendations": []
+}
