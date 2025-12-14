@@ -1,6 +1,7 @@
 # Datasets
 data/raw/
 data/Processed/
+Notebooks/data
 
 # Models
 Models/

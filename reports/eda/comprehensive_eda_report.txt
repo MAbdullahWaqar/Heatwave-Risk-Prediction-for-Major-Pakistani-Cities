@@ -1,0 +1,48 @@
+
+    ============================================
+    COMPREHENSIVE EDA REPORT - MULTI-DISEASE PREDICTION
+    ============================================
+    
+    Dataset Overview:
+    - Total counties: 52
+    - Total features: 41
+    - Missing values: 191 (9.0%)
+    
+    Feature Categories:
+    
+  Disease Prevalence: 8 features
+    Examples: Pct_HeartDisease, Pct_HeartAttack, Pct_Stroke
+  Risk Factors: 5 features
+    Examples: Pct_HighBP, Pct_HighChol, Pct_Smoker
+  Demographics: 2 features
+    Examples: Sample_Size, Avg_Age
+  Environmental: 5 features
+    Examples: State_Avg_AQI, State_Max_AQI, State_AQI_Severity
+  Composite Scores: 7 features
+    Examples: Avg_MultiMorbidity_Index, Avg_CardioRisk_Score, Avg_LifestyleRisk_Score
+
+============================================================
+DATA QUALITY ASSESSMENT
+============================================================
+
+Features with >20% missing values: 3
+Features with >50% missing values: 3
+
+============================================================
+KEY INSIGHTS
+============================================================
+
+Average State AQI: 40.4
+Average Diabetes Prevalence: 14.2%
+
+Top Disease Correlations:
+
+Pct_Diabetes:
+  + Pct_Diabetes_norm: 1.000
+  + Cardio_Environmental_Risk: 0.901
+  + COPD_AQI_Interaction: 0.823
+
+Pct_HeartDisease:
+  + Pct_Diabetes_norm: 0.634
+  + Cardio_Environmental_Risk: 0.809
+  + COPD_AQI_Interaction: 0.806

@@ -1,0 +1,31 @@
+
+        MULTI-DISEASE PREDICTION MODEL TRAINING SUMMARY
+        =================================================
+        
+        Dataset Information:
+        - Original features: 83
+        - Processed features: 88
+        - Training samples: 41
+        - Testing samples: 11
+        - Task type: REGRESSION
+        - Numeric features: 70
+        - Categorical features: 13
+        
+        Target Variables:
+        Pct_Diabetes, Pct_HeartDisease, Pct_Stroke, Pct_Asthma
+        
+        Models Trained:
+        - Baseline models: 3
+        - Classical models: 6
+        - Ensemble models: 5
+        - Stacking ensemble: 1
+        
+        Best Overall Model:
+        - Model: Ridge_Regression
+- Performance (avg_r2): 0.9028
+
+Output Files Generated:
+- models/: Saved model files (.pkl)
+- reports/model_evaluation/: Performance metrics
+- reports/feature_importance/: Feature importance analysis
+- reports/model_interpretation/: Model interpretation reports
