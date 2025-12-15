@@ -1,0 +1,9 @@
+pandas
+numpy
+scikit-learn>=1.3
+matplotlib
+joblib
+shap
+streamlit
+plotly
+pydeck

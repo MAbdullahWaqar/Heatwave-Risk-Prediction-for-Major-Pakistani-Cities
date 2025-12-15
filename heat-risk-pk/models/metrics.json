@@ -1,0 +1,14 @@
+{
+  "monitoring_logreg": {
+    "macro_f1": 0.9152894056847545,
+    "accuracy": 0.9290123456790124
+  },
+  "forecast_hgb": {
+    "macro_f1": 0.7809709677494994,
+    "accuracy": 0.8209876543209876
+  },
+  "notes": {
+    "monitoring_model": "Uses risk_lag_* features; best for monitoring/alerts",
+    "forecast_model": "Climate-only; best for forward scenario forecasting"
+  }
+}

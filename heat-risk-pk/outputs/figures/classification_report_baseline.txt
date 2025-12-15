@@ -1,0 +1,10 @@
+              precision    recall  f1-score   support
+
+         Low       0.39      1.00      0.56       127
+    Moderate       0.00      0.00      0.00        64
+        High       0.00      0.00      0.00        62
+     Extreme       0.00      0.00      0.00        71
+
+    accuracy                           0.39       324
+   macro avg       0.10      0.25      0.14       324
+weighted avg       0.15      0.39      0.22       324

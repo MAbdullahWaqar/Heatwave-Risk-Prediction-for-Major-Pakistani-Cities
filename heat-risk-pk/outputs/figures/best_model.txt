@@ -1,0 +1,6 @@
+model                logreg
+accuracy            0.92284
+macro_f1           0.907482
+macro_precision    0.906728
+macro_recall       0.910368
+extreme_recall     0.957746
