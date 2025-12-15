@@ -6,21 +6,27 @@ from pathlib import Path
 import json
 import plotly.express as px
 
-# -----------------------------
+# =====================================================
 # Page config
-# -----------------------------
+# =====================================================
 st.set_page_config(
     page_title="Urban Heat Stress Risk – Pakistan",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# =====================================================
+# Paths
+# =====================================================
 ROOT = Path(__file__).resolve().parents[1]
 FORECAST_DIR = ROOT / "outputs" / "forecasts"
 FIG_DIR = ROOT / "outputs" / "figures"
 MODELS_DIR = ROOT / "models"
 DATA_PROCESSED = ROOT / "data" / "processed"
 
+# =====================================================
+# Constants
+# =====================================================
 RISK_LABELS = {0: "Low", 1: "Moderate", 2: "High", 3: "Extreme"}
 RISK_COLORS = {
     0: [0, 200, 0],
@@ -39,11 +45,11 @@ CITY_COORDS = {
     "Quetta": (30.1798, 66.9750),
 }
 
-# -----------------------------
+# =====================================================
 # Helpers
-# -----------------------------
+# =====================================================
 @st.cache_data
-def load_forecast(horizon, scenario_slug):
+def load_forecast(horizon: int, scenario_slug: str) -> pd.DataFrame:
     fname = f"forecast_{horizon}m_{scenario_slug}.csv"
     path = FORECAST_DIR / fname
     if not path.exists():
@@ -54,18 +60,15 @@ def load_forecast(horizon, scenario_slug):
             f"- forecast_6m_plus1c.csv\n"
             f"- forecast_6m_plus2c.csv"
         )
-    df = pd.read_csv(path)
-    return df
-
-@st.cache_data
-def load_metrics():
-    path = FIG_DIR / "model_metrics.csv"
-    if not path.exists():
-        return None
     return pd.read_csv(path)
 
 @st.cache_data
-def load_model_notes():
+def load_metrics() -> pd.DataFrame | None:
+    path = FIG_DIR / "model_metrics.csv"
+    return pd.read_csv(path) if path.exists() else None
+
+@st.cache_data
+def load_model_notes() -> dict | None:
     path = MODELS_DIR / "metrics.json"
     if not path.exists():
         return None
@@ -73,17 +76,56 @@ def load_model_notes():
         return json.load(f)
 
 @st.cache_data
-def load_history_if_exists():
+def load_history_if_exists() -> pd.DataFrame | None:
     path = DATA_PROCESSED / "df_model_forecast.csv"
-    if not path.exists():
-        return None
-    return pd.read_csv(path)
+    return pd.read_csv(path) if path.exists() else None
 
-def apply_whatif_rescore(df, temp_delta, urban_delta, pop_mult):
+def expected_risk_from_probs(df: pd.DataFrame, p_low, p_mod, p_high, p_extreme) -> pd.Series:
+    return 0*p_low + 1*p_mod + 2*p_high + 3*p_extreme
+
+def extend_forecast_to_year(df_in: pd.DataFrame, target_end_year: int = 2030) -> pd.DataFrame:
     """
-    Instant re-scoring layer for PoC interactivity.
-    Adjusts p_extreme and renormalizes probabilities based on sliders.
-    This is a "what-if sensitivity layer" (not retraining).
+    Extends forecast table to target_end_year by repeating last 12-month pattern per city.
+    This is a PoC projection layer to support long-horizon dashboards (2026–2030).
+    """
+    df = df_in.copy().sort_values(["city", "year", "month"])
+    if int(df["year"].max()) >= target_end_year:
+        if "date" not in df.columns:
+            df["date"] = pd.to_datetime(df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2) + "-01")
+        return df
+
+    out_chunks = [df]
+    for city in df["city"].unique():
+        d = df[df["city"] == city].copy().sort_values(["year", "month"])
+        if d.empty:
+            continue
+
+        pattern = d.tail(12).copy()
+        last_y = int(d.iloc[-1]["year"])
+        last_m = int(d.iloc[-1]["month"])
+
+        y, m = last_y, last_m
+        while y < target_end_year or (y == target_end_year and m < 12):
+            m += 1
+            if m == 13:
+                y += 1
+                m = 1
+            src = pattern[pattern["month"] == m]
+            if src.empty:
+                src = pattern.tail(1)
+            row = src.iloc[0].to_dict()
+            row["year"] = y
+            row["month"] = m
+            out_chunks.append(pd.DataFrame([row]))
+
+    df_ext = pd.concat(out_chunks, ignore_index=True)
+    df_ext["date"] = pd.to_datetime(df_ext["year"].astype(str) + "-" + df_ext["month"].astype(str).str.zfill(2) + "-01")
+    return df_ext
+
+def apply_whatif_rescore(df: pd.DataFrame, temp_delta: float, urban_delta: float, pop_mult: float) -> pd.DataFrame:
+    """
+    Instant what-if sensitivity layer.
+    Adjusts probabilities and re-normalizes to give interactive scenario response.
     """
     df2 = df.copy()
 
@@ -91,6 +133,7 @@ def apply_whatif_rescore(df, temp_delta, urban_delta, pop_mult):
     score = (0.35 * temp_delta) + (0.08 * urban_delta) + (0.60 * (pop_mult - 1.0))
     bump = 1 / (1 + np.exp(-score))  # 0..1
 
+    # shift extreme prob slightly, then take mass from low/mod/high
     df2["p_extreme_adj"] = np.clip(df2["p_extreme"] + 0.35 * (bump - 0.5), 0, 1)
     take = df2["p_extreme_adj"] - df2["p_extreme"]
 
@@ -102,16 +145,20 @@ def apply_whatif_rescore(df, temp_delta, urban_delta, pop_mult):
     for c in ["p_low_adj", "p_mod_adj", "p_high_adj", "p_extreme_adj"]:
         df2[c] = df2[c] / s
 
-    df2["expected_risk_adj"] = (
-        0 * df2["p_low_adj"] + 1 * df2["p_mod_adj"] + 2 * df2["p_high_adj"] + 3 * df2["p_extreme_adj"]
-    )
+    df2["expected_risk_adj"] = expected_risk_from_probs(df2, df2["p_low_adj"], df2["p_mod_adj"], df2["p_high_adj"], df2["p_extreme_adj"])
     df2["pred_risk_adj"] = df2[["p_low_adj", "p_mod_adj", "p_high_adj", "p_extreme_adj"]].values.argmax(axis=1)
     df2["risk_name_adj"] = df2["pred_risk_adj"].map(RISK_LABELS)
     return df2
 
-# -----------------------------
+def safe_image(path: Path, caption: str):
+    if path.exists():
+        st.image(str(path), caption=caption, use_container_width=True)
+    else:
+        st.info(f"Missing figure: {path.name}")
+
+# =====================================================
 # Sidebar controls
-# -----------------------------
+# =====================================================
 st.sidebar.title("🔧 Controls")
 
 horizon = st.sidebar.selectbox("Forecast Horizon (months)", [6, 12, 24], index=0)
@@ -126,12 +173,12 @@ scenario = scenario_map[scenario_label]
 
 selected_city = st.sidebar.selectbox(
     "City Drill-Down",
-    ["All Cities", "Karachi", "Lahore", "Multan", "Islamabad", "Rawalpindi", "Peshawar", "Quetta"]
+    ["All Cities", *CITY_COORDS.keys()]
 )
 
 compare_cities = st.sidebar.multiselect(
     "Compare Cities (multi-line chart)",
-    ["Karachi", "Lahore", "Multan", "Islamabad", "Rawalpindi", "Peshawar", "Quetta"],
+    list(CITY_COORDS.keys()),
     default=["Karachi", "Lahore", "Multan"]
 )
 
@@ -139,78 +186,99 @@ st.sidebar.subheader("🧪 What-if Simulation (Instant)")
 temp_delta = st.sidebar.slider("Temperature delta (°C)", -1.0, 4.0, 0.0, 0.5)
 urban_delta = st.sidebar.slider("Urbanization delta (pp)", -5.0, 10.0, 0.0, 0.5)
 pop_mult = st.sidebar.slider("Population multiplier", 0.8, 1.5, 1.0, 0.05)
-predict_now = st.sidebar.button("🚀 Predict Now", type="primary")
 
-# -----------------------------
+# persistent what-if toggle
+if "use_whatif" not in st.session_state:
+    st.session_state["use_whatif"] = False
+
+predict_now = st.sidebar.button("🚀 Predict Now", type="primary")
+reset_whatif = st.sidebar.button("↩ Reset What-if")
+
+if predict_now:
+    st.session_state["use_whatif"] = True
+if reset_whatif:
+    st.session_state["use_whatif"] = False
+
+# =====================================================
 # Load forecast data
-# -----------------------------
+# =====================================================
 try:
     df = load_forecast(horizon, scenario)
 except Exception as e:
     st.error(str(e))
     st.stop()
 
-# Date + label setup
+# Build date
 df["date"] = pd.to_datetime(df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2) + "-01")
+
+# Extend to 2030 (PoC)
+st.sidebar.subheader("📅 Display Window")
+extend_to_2030 = st.sidebar.checkbox("Extend forecast to 2030 (PoC projection)", value=True)
+if extend_to_2030:
+    df = extend_forecast_to_year(df, 2030)
+
+st.sidebar.caption(f"Forecast years available (after extension): {int(df['year'].min())} → {int(df['year'].max())}")
+
+default_from = 2026 if int(df["year"].max()) >= 2026 else int(df["year"].min())
+year_from = st.sidebar.number_input("Show from year", value=default_from, step=1)
+year_to = st.sidebar.number_input("Show until year", value=int(df["year"].max()), step=1)
+
+df = df[(df["year"] >= year_from) & (df["year"] <= year_to)].copy()
 
 # base outputs
 df["risk_name"] = df["pred_risk"].map(RISK_LABELS)
-df["expected_risk"] = (0 * df.p_low + 1 * df.p_mod + 2 * df.p_high + 3 * df.p_extreme)
+df["expected_risk"] = expected_risk_from_probs(df, df["p_low"], df["p_mod"], df["p_high"], df["p_extreme"])
 
-# Display window (so you can show 2026 if present)
-st.sidebar.subheader("📅 Display Window")
-st.sidebar.caption(f"Forecast years available: {int(df['year'].min())} → {int(df['year'].max())}")
-year_from = st.sidebar.number_input("Show from year", value=int(df["year"].min()), step=1)
-year_to = st.sidebar.number_input("Show until year", value=int(df["year"].max()), step=1)
-df = df[(df["year"] >= year_from) & (df["year"] <= year_to)].copy()
-
-# What-if view state (persistent)
-if "use_whatif" not in st.session_state:
-    st.session_state["use_whatif"] = False
-
-if predict_now:
-    st.session_state["use_whatif"] = True
-    st.success("✅ What-if prediction updated instantly.")
-
+# What-if view (df_view)
 df_view = df.copy()
-
-# Apply what-if rescore if enabled
 if st.session_state["use_whatif"]:
     df_view = apply_whatif_rescore(df_view, temp_delta, urban_delta, pop_mult)
     df_view["pred_risk_view"] = df_view["pred_risk_adj"]
     df_view["risk_name_view"] = df_view["risk_name_adj"]
     df_view["expected_risk_view"] = df_view["expected_risk_adj"]
     df_view["p_extreme_view"] = df_view["p_extreme_adj"]
+    df_view["p_low_view"] = df_view["p_low_adj"]
+    df_view["p_mod_view"] = df_view["p_mod_adj"]
+    df_view["p_high_view"] = df_view["p_high_adj"]
 else:
     df_view["pred_risk_view"] = df_view["pred_risk"]
     df_view["risk_name_view"] = df_view["risk_name"]
     df_view["expected_risk_view"] = df_view["expected_risk"]
     df_view["p_extreme_view"] = df_view["p_extreme"]
+    df_view["p_low_view"] = df_view["p_low"]
+    df_view["p_mod_view"] = df_view["p_mod"]
+    df_view["p_high_view"] = df_view["p_high"]
 
-# -----------------------------
+# =====================================================
 # HEADER
-# -----------------------------
+# =====================================================
 st.title("🔥 Urban Heat Stress Risk Forecasting – Pakistan")
 st.markdown("""
 **End-to-end ML decision-support system** for forecasting urban heat stress risk  
-Includes: model comparison, explainability, interactive what-if simulation, and city risk monitoring.
+Includes: model comparison, explainability (SHAP), feature importance, interactive what-if simulation, and city risk monitoring.
 """)
 
-# -----------------------------
+# =====================================================
 # KPI ROW
-# -----------------------------
+# =====================================================
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("Cities Analysed", df_view["city"].nunique())
 k2.metric("Forecast Horizon", f"{horizon} months")
-k3.metric("Cities w/ any Extreme month", int((df_view["pred_risk_view"] == 3).groupby(df_view["city"]).any().sum()))
+k3.metric(
+    "Cities with ≥1 Extreme Month",
+    int((df_view["pred_risk_view"] == 3).groupby(df_view["city"]).any().sum())
+)
 k4.metric("Max P(Extreme)", f"{df_view['p_extreme_view'].max():.2f}")
+
+if st.session_state["use_whatif"]:
+    st.info("What-if mode is ON. Click **Reset What-if** in the sidebar to revert to baseline.")
 
 st.divider()
 
 # =====================================================
-# SECTION 1 — MAP
+# SECTION 1 — PAKISTAN RISK MAP
 # =====================================================
-st.header("🗺 Pakistan Urban Heat Stress Risk Map (Forecast)")
+st.header("🗺 Pakistan Urban Heat Stress Risk Map")
 
 map_df = (
     df_view.groupby("city")
@@ -236,13 +304,18 @@ layer = pdk.Layer(
     pickable=True,
 )
 
-view_state = pdk.ViewState(latitude=30.5, longitude=69.0, zoom=5, pitch=0)
+view_state = pdk.ViewState(
+    latitude=30.5,
+    longitude=69.0,
+    zoom=5,
+    pitch=0,
+)
 
 st.pydeck_chart(
     pdk.Deck(
         layers=[layer],
         initial_view_state=view_state,
-        tooltip={"text": "{city}\nAvg risk: {avg_risk}\nMax P(extreme): {max_extreme}"}
+        tooltip={"text": "{city}\nAvg risk: {avg_risk}\nMax P(extreme): {max_extreme}"},
     )
 )
 
@@ -251,7 +324,7 @@ st.divider()
 # =====================================================
 # SECTION 2 — TOP CITIES TABLE + INSIGHTS
 # =====================================================
-st.header("🏙 Top Cities at Risk (Ranked)")
+st.header("🏙 Top Cities at Risk")
 
 top = (
     df_view.groupby("city")
@@ -265,17 +338,15 @@ top = (
 
 st.dataframe(top.style.background_gradient(cmap="Reds"), use_container_width=True)
 
-# Quick insights
-worst = top.index[0]
 st.markdown("### 🔎 Key Insights (Auto)")
-st.write(f"- **Highest average expected risk:** {worst} (avg={top.iloc[0]['avg_expected_risk']:.2f})")
+st.write(f"- **Highest average expected risk:** {top.index[0]} (avg={top.iloc[0]['avg_expected_risk']:.2f})")
 st.write(f"- **Highest max extreme probability:** {top['max_extreme_prob'].idxmax()} (max={top['max_extreme_prob'].max():.2f})")
-st.write(f"- **Total Extreme months across all cities:** {int((df_view['pred_risk_view']==3).sum())}")
+st.write(f"- **Total Extreme months across all cities (current view):** {int((df_view['pred_risk_view'] == 3).sum())}")
 
 st.divider()
 
 # =====================================================
-# SECTION 3 — CITY TIMELINE + COMPARISON
+# SECTION 3 — CITY DRILL-DOWN + TABLE (uses proper date axis)
 # =====================================================
 st.header("📈 City Risk Timeline")
 
@@ -293,27 +364,36 @@ if selected_city != "All Cities":
             "month": True,
             "risk_name_view": True,
             "p_extreme_view": ":.3f",
-        }
+            "expected_risk_view": ":.3f",
+        },
     )
     fig.update_yaxes(title="Expected Risk (0=Low → 3=Extreme)", range=[0, 3])
     fig.update_xaxes(title="Month")
     st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("**Monthly forecast table**")
-    st.dataframe(city_df[["year", "month", "risk_name_view", "p_extreme_view", "expected_risk_view"]], use_container_width=True)
+    st.markdown("**Monthly Risk Classification (Forecast View)**")
+    st.dataframe(
+        city_df[["year", "month", "risk_name_view", "p_low_view", "p_mod_view", "p_high_view", "p_extreme_view", "expected_risk_view"]],
+        use_container_width=True
+    )
 else:
     st.info("Select a city from the sidebar to view its timeline.")
 
-st.subheader("📊 City Comparison (Selected Cities)")
+st.divider()
+
+# =====================================================
+# SECTION 3B — CITY COMPARISON (Expected Risk + P(Extreme))
+# =====================================================
+st.header("📊 City Comparison")
 
 comp_df = df_view[df_view["city"].isin(compare_cities)].sort_values("date").copy()
-if len(comp_df):
+if len(comp_df) > 0:
     fig2 = px.line(
         comp_df,
         x="date",
         y="expected_risk_view",
         color="city",
-        title="Expected Risk Comparison Across Cities"
+        title="Expected Risk Comparison Across Cities",
     )
     fig2.update_yaxes(title="Expected Risk (0..3)", range=[0, 3])
     fig2.update_xaxes(title="Month")
@@ -324,7 +404,7 @@ if len(comp_df):
         x="date",
         y="p_extreme_view",
         color="city",
-        title="Extreme Probability Comparison Across Cities"
+        title="Extreme Probability Comparison Across Cities",
     )
     fig3.update_yaxes(title="P(Extreme)")
     fig3.update_xaxes(title="Month")
@@ -335,7 +415,7 @@ else:
 st.divider()
 
 # =====================================================
-# SECTION 4 — PAST RECORDS DRILL-DOWN (if processed history exists)
+# SECTION 4 — PAST RECORDS (City->Record->Details) + REACTIVE GRAPHS
 # =====================================================
 st.header("🕰 Past Records (City → Month → Details)")
 
@@ -343,45 +423,116 @@ hist = load_history_if_exists()
 if hist is None:
     st.info("Historical processed file not found: data/processed/df_model_forecast.csv (optional section).")
 else:
+    hist = hist.copy()
     hist["date"] = pd.to_datetime(hist["year"].astype(str) + "-" + hist["month"].astype(str).str.zfill(2) + "-01")
     hist_cities = sorted(hist["city"].unique().tolist())
 
-    c_left, c_right = st.columns([1, 2])
+    left, right = st.columns([1, 2])
 
-    with c_left:
-        h_city = st.selectbox("City (history)", hist_cities)
+    with left:
+        h_city = st.selectbox("City (history)", hist_cities, key="hist_city_select")
         h_df = hist[hist["city"] == h_city].sort_values("date").copy()
         h_df["record_key"] = h_df["year"].astype(str) + "-" + h_df["month"].astype(str).str.zfill(2)
-        rec_key = st.selectbox("Pick a historical record (year-month)", h_df["record_key"].tolist(), index=len(h_df)-1)
+
+        rec_key = st.selectbox("Pick a historical record (year-month)", h_df["record_key"].tolist(), index=len(h_df) - 1, key="hist_record_select")
         rec = h_df[h_df["record_key"] == rec_key].iloc[0]
+        rec_date = pd.to_datetime(str(rec["year"]) + "-" + str(int(rec["month"])).zfill(2) + "-01")
 
         st.markdown("### Record Details")
         st.write(f"**Record:** {rec_key}")
         if "risk_label" in h_df.columns:
-            st.write(f"**Observed Risk:** {int(rec['risk_label'])} ({RISK_LABELS.get(int(rec['risk_label']), 'NA')})")
-        for col in ["tavg_mean", "tmax_mean", "heat_stress_index", "pop_density", "urban_pct"]:
+            rl = int(rec["risk_label"]) if pd.notna(rec["risk_label"]) else None
+            if rl is not None:
+                st.write(f"**Observed Risk:** {rl} ({RISK_LABELS.get(rl, 'NA')})")
+
+        # show key columns if present
+        for col in ["tavg_mean", "tmax_mean", "heat_stress_index", "pop_density", "urban_pct", "surface_temp_avg"]:
             if col in h_df.columns:
                 val = rec.get(col, np.nan)
                 st.write(f"- **{col}:** {val:.3f}" if pd.notna(val) else f"- **{col}:** NA")
 
-    with c_right:
-        st.markdown("### Historical Trends")
-        ycol = "heat_stress_index" if "heat_stress_index" in h_df.columns else None
-        if ycol:
-            st.plotly_chart(px.line(h_df, x="date", y=ycol, title=f"{h_city}: Heat Stress Index (History)"), use_container_width=True)
+        window_months = st.slider("Context window around selected record (months)", 3, 24, 12, 3, key="hist_window")
+        h_window = h_df[
+            (h_df["date"] >= rec_date - pd.DateOffset(months=window_months)) &
+            (h_df["date"] <= rec_date + pd.DateOffset(months=window_months))
+        ].copy()
+
+    with right:
+        st.markdown("### Historical Trends (Reactive to Selected Record)")
+
+        if "heat_stress_index" in h_df.columns:
+            fig_h1 = px.line(
+                h_window,
+                x="date",
+                y="heat_stress_index",
+                title=f"{h_city}: Heat Stress Index (±{window_months} months around {rec_key})",
+            )
+            fig_h1.add_vline(x=rec_date, line_width=3, line_dash="dash")
+            st.plotly_chart(fig_h1, use_container_width=True)
+        else:
+            st.info("heat_stress_index not found in historical file.")
+
         if "tmax_mean" in h_df.columns:
-            st.plotly_chart(px.line(h_df, x="date", y="tmax_mean", title=f"{h_city}: Tmax Mean (History)"), use_container_width=True)
+            fig_h2 = px.line(
+                h_window,
+                x="date",
+                y="tmax_mean",
+                title=f"{h_city}: Tmax Mean (±{window_months} months around {rec_key})",
+            )
+            fig_h2.add_vline(x=rec_date, line_width=3, line_dash="dash")
+            st.plotly_chart(fig_h2, use_container_width=True)
+
+        if "tavg_mean" in h_df.columns:
+            fig_h3 = px.line(
+                h_window,
+                x="date",
+                y="tavg_mean",
+                title=f"{h_city}: Tavg Mean (±{window_months} months around {rec_key})",
+            )
+            fig_h3.add_vline(x=rec_date, line_width=3, line_dash="dash")
+            st.plotly_chart(fig_h3, use_container_width=True)
 
 st.divider()
 
 # =====================================================
-# SECTION 5 — MODEL PERFORMANCE
+# SECTION 4B — PAST PATTERNS (Seasonality)
+# =====================================================
+st.header("🧾 Past Data Patterns (Seasonality)")
+
+hist2 = load_history_if_exists()
+if hist2 is None:
+    st.info("No historical file found to show seasonal patterns.")
+else:
+    hist2 = hist2.copy()
+    hist2["month"] = hist2["month"].astype(int)
+    hist_city = st.selectbox("Pick city for seasonal pattern", sorted(hist2["city"].unique()), key="season_city")
+
+    h = hist2[hist2["city"] == hist_city].copy()
+    if "tmax_mean" in h.columns:
+        seasonal = h.groupby("month")["tmax_mean"].mean().reset_index()
+        fig_season = px.line(
+            seasonal,
+            x="month",
+            y="tmax_mean",
+            markers=True,
+            title=f"{hist_city}: Average Tmax by Month (Historical Seasonal Pattern)",
+        )
+        fig_season.update_xaxes(title="Month (1-12)")
+        fig_season.update_yaxes(title="Avg Tmax (°C)")
+        st.plotly_chart(fig_season, use_container_width=True)
+    else:
+        st.info("tmax_mean not found in historical file.")
+
+st.divider()
+
+# =====================================================
+# SECTION 5 — MODEL PERFORMANCE & SELECTION
 # =====================================================
 st.header("🧠 Model Performance & Selection")
 
 metrics = load_metrics()
 if metrics is None:
-    st.warning("model_metrics.csv not found. Run: python -m src.evaluate_all_models")
+    st.warning("model_metrics.csv not found. Generate it from your evaluation script.")
 else:
     st.dataframe(metrics.style.highlight_max(axis=0), use_container_width=True)
 
@@ -389,44 +540,54 @@ st.markdown("""
 **Model Selection Criteria**
 - Primary: **Macro-F1** (handles class imbalance)
 - Safety-critical: **Extreme-class Recall**
-- Selected model: **Climate-only Gradient Boosting**
+- Selected model: **Climate-only Gradient Boosting / HGB (deployed for forecast)**
 """)
 
+notes = load_model_notes()
+if notes is not None:
+    with st.expander("Model Notes (metrics.json)"):
+        st.json(notes)
+
+st.subheader("Confusion Matrices")
 cm_cols = st.columns(3)
-for img in ["confusion_matrix_baseline.png", "confusion_matrix_logreg.png", "confusion_matrix_hgb.png"]:
+for i, img in enumerate([
+    "confusion_matrix_baseline.png",
+    "confusion_matrix_logreg.png",
+    "confusion_matrix_hgb.png",
+]):
     p = FIG_DIR / img
-    if p.exists():
-        cm_cols.pop(0).image(str(p), caption=img, use_container_width=True)
+    with cm_cols[i]:
+        safe_image(p, img)
 
 st.divider()
 
 # =====================================================
-# SECTION 6 — FEATURE IMPORTANCE + SHAP (if figures exist)
+# SECTION 6 — FEATURE IMPORTANCE
 # =====================================================
-st.header("🔍 Feature Contribution & Explainability")
+st.header("🔍 Feature Contribution Analysis")
 
 c1, c2 = st.columns(2)
-p1 = FIG_DIR / "perm_importance_forecast_hgb_top15.png"
-p2 = FIG_DIR / "rf_feature_importance_top15.png"
-if p1.exists():
-    c1.image(str(p1), caption="Permutation Importance (Deployed Forecast Model)", use_container_width=True)
-else:
-    c1.info("Run: python -m src.feature_importance")
 
-if p2.exists():
-    c2.image(str(p2), caption="Random Forest Feature Importance", use_container_width=True)
+with c1:
+    safe_image(FIG_DIR / "perm_importance_forecast_hgb_top15.png",
+               "Permutation Importance (Deployed Forecast Model)")
 
-st.subheader("🧩 SHAP Explainability")
-c3, c4 = st.columns(2)
-s1 = FIG_DIR / "shap_summary_extreme.png"
-s2 = FIG_DIR / "shap_waterfall_example.png"
-if s1.exists():
-    c3.image(str(s1), caption="Global SHAP Summary – Extreme Risk", use_container_width=True)
-else:
-    c3.info("Run: python -m src.explain")
+with c2:
+    safe_image(FIG_DIR / "rf_feature_importance_top15.png",
+               "Random Forest Feature Importance")
 
-if s2.exists():
-    c4.image(str(s2), caption="Local SHAP Waterfall – Example", use_container_width=True)
+st.divider()
+
+# =====================================================
+# SECTION 7 — SHAP EXPLAINABILITY
+# =====================================================
+st.header("🧩 Model Explainability (SHAP)")
+
+s1, s2 = st.columns(2)
+with s1:
+    safe_image(FIG_DIR / "shap_summary_extreme.png", "Global SHAP Summary – Extreme Risk")
+with s2:
+    safe_image(FIG_DIR / "shap_waterfall_example.png", "Local SHAP Explanation – Single City-Month")
 
 st.divider()
 
@@ -436,8 +597,9 @@ st.divider()
 st.markdown("""
 ---
 ### 📌 Project Summary
-- **Task:** Urban Heat Stress Risk Forecasting (Pakistan cities)
-- **Data:** 4 public heterogeneous sources (weather, population density, urban %, surface temperature)
-- **ML:** Baseline + classical models + ensemble + explainability
-- **PoC:** Interactive dashboard, map, what-if simulation, historical drill-down
+- **Task:** Urban Heat Stress Risk Forecasting (Pakistan Cities)
+- **Data:** 4 public heterogeneous sources (weather + population density + urbanization + surface temp)
+- **Models:** Baseline + classical ML + ensemble + explainability (SHAP)
+- **PoC:** Interactive dashboard with maps, comparisons, historical drill-down, and what-if simulation
+- **Course:** CS-245 Machine Learning Capstone
 """)
