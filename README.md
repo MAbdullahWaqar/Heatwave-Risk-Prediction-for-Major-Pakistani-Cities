@@ -1,8 +1,8 @@
-# 🔥 Urban Heat Stress Risk Forecasting — Pakistan (CS-245 Capstone)
+#  Urban Heat Stress Risk Forecasting — Pakistan (CS-245 Capstone)
 
 End-to-end ML decision-support system to **forecast urban heat stress risk** for major Pakistani cities using **multi-source heterogeneous datasets** and a deployed **Streamlit PoC dashboard**.
 
-## ✅ What this project delivers
+##  What this project delivers
 - **Integrated dataset pipeline** (4 sources merged + feature engineering)
 - **ML pipeline** with baseline + multiple classical models + ensemble
 - **Model comparison** (metrics + confusion matrices + classification reports)
@@ -19,7 +19,7 @@ End-to-end ML decision-support system to **forecast urban heat stress risk** for
 
 ---
 
-## 📁 Recommended Project Structure
+##  Project Structure
 
 heat-risk-pk/
 ├─ app/
@@ -57,7 +57,7 @@ Copy code
 
 ## ⚙️ Setup
 
-### 1) Create environment & install dependencies
+### Follow the following steps to Run this Project : Create environment & install dependencies
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # mac/linux
