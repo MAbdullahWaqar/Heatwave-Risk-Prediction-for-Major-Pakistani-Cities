@@ -169,11 +169,24 @@ def main():
     run(12, {"temp_delta_c":0.0, "urban_delta_pct":0.0, "pop_delta_mult":1.0}, "baseline")
     run(24, {"temp_delta_c":0.0, "urban_delta_pct":0.0, "pop_delta_mult":1.0}, "baseline")
 
+    # Medium-term forecasts (3-5 years)
+    run(36, {"temp_delta_c":0.0, "urban_delta_pct":0.0, "pop_delta_mult":1.0}, "baseline")
+    run(48, {"temp_delta_c":0.0, "urban_delta_pct":0.0, "pop_delta_mult":1.0}, "baseline")
+    run(60, {"temp_delta_c":0.0, "urban_delta_pct":0.0, "pop_delta_mult":1.0}, "baseline")
+
     # Short-term scenarios (ensure dashboard has 12m/24m scenario files)
     run(12, {"temp_delta_c":1.0, "urban_delta_pct":2.0,  "pop_delta_mult":1.05}, "plus1c")
     run(24, {"temp_delta_c":1.0, "urban_delta_pct":2.0,  "pop_delta_mult":1.05}, "plus1c")
     run(12, {"temp_delta_c":2.0, "urban_delta_pct":4.0,  "pop_delta_mult":1.10}, "plus2c")
     run(24, {"temp_delta_c":2.0, "urban_delta_pct":4.0,  "pop_delta_mult":1.10}, "plus2c")
+
+    # Medium-term scenarios
+    run(36, {"temp_delta_c":1.0, "urban_delta_pct":2.0,  "pop_delta_mult":1.05}, "plus1c")
+    run(48, {"temp_delta_c":1.0, "urban_delta_pct":2.0,  "pop_delta_mult":1.05}, "plus1c")
+    run(60, {"temp_delta_c":1.0, "urban_delta_pct":2.0,  "pop_delta_mult":1.05}, "plus1c")
+    run(36, {"temp_delta_c":2.0, "urban_delta_pct":4.0,  "pop_delta_mult":1.10}, "plus2c")
+    run(48, {"temp_delta_c":2.0, "urban_delta_pct":4.0,  "pop_delta_mult":1.10}, "plus2c")
+    run(60, {"temp_delta_c":2.0, "urban_delta_pct":4.0,  "pop_delta_mult":1.10}, "plus2c")
 
     # Extended forecasts to 2030 (72 months = 6 years from 2024)
     run(72, {"temp_delta_c":0.0, "urban_delta_pct":0.0, "pop_delta_mult":1.0}, "baseline")
@@ -183,7 +196,7 @@ def main():
     run(72, {"temp_delta_c":2.0, "urban_delta_pct":4.0,  "pop_delta_mult":1.10}, "plus2c")
 
     print("Saved forecasts to:", FORECAST_DIR)
-    print("Generated horizons: 6m, 12m, 24m, 72m (to 2030) + scenarios")
+    print("Generated horizons: 6m, 12m, 24m, 36m, 48m, 60m, 72m (to 2030) + scenarios")
 
 
 if __name__ == "__main__":

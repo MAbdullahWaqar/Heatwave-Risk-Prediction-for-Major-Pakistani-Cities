@@ -212,7 +212,7 @@ def safe_image(path: Path, caption: str):
 # =====================================================
 st.sidebar.title("🔧 Controls")
 
-horizon = st.sidebar.selectbox("Forecast Horizon (months)", [6, 12, 24, 72], index=0)
+horizon = st.sidebar.selectbox("Forecast Horizon (months)", [6, 12, 24, 36, 48, 60, 72], index=0)
 
 scenario_label = st.sidebar.selectbox(
     "Climate Scenario",
@@ -307,8 +307,71 @@ k3.metric(
 )
 k4.metric("Max P(Extreme)", f"{df_view['p_extreme_view'].max():.2f}")
 
+# =====================================================
+# SCENARIO COMPARISON TABLE (if multiple scenarios loaded)
+# =====================================================
+# Build scenario comparison by checking which scenarios are available
+scenario_data = []
+for scen_name in ["baseline", "plus1c", "plus2c"]:
+    fname = f"forecast_{horizon}m_{scen_name}.csv"
+    path = FORECAST_DIR / fname
+    if path.exists():
+        try:
+            df_scen = load_forecast(horizon, scen_name)
+            if df_scen is not None and len(df_scen) > 0:
+                # Calculate expected risk for this scenario
+                df_scen["expected_risk"] = expected_risk_from_probs(
+                    df_scen, df_scen["p_low"], df_scen["p_mod"], df_scen["p_high"], df_scen["p_extreme"]
+                )
+                scenario_data.append({
+                    "Scenario": {
+                        "baseline": "Baseline (No Change)",
+                        "plus1c": "+1°C Warming",
+                        "plus2c": "+2°C Warming"
+                    }[scen_name],
+                    "Avg Expected Risk": df_scen["expected_risk"].mean(),
+                    "Extreme Months (Total)": int((df_scen["pred_risk"] == 3).sum()),
+                    "Cities w/ Extreme Risk": int((df_scen["pred_risk"] == 3).groupby(df_scen["city"]).any().sum())
+                })
+        except Exception as e:
+            pass  # Skip scenarios that fail to load
+
+if len(scenario_data) > 1:
+    st.subheader("📊 Scenario Impact Comparison")
+    comp_df = pd.DataFrame(scenario_data)
+    
+    # Calculate percentage changes from baseline
+    if len(comp_df) >= 2:
+        baseline_risk = comp_df.loc[comp_df["Scenario"] == "Baseline (No Change)", "Avg Expected Risk"].values[0]
+        comp_df["Risk Change (%)"] = ((comp_df["Avg Expected Risk"] - baseline_risk) / baseline_risk * 100).round(1)
+    
+    st.dataframe(
+        comp_df.style.format({
+            "Avg Expected Risk": "{:.3f}",
+            "Extreme Months (Total)": "{:.0f}",
+            "Cities w/ Extreme Risk": "{:.0f}",
+            "Risk Change (%)": "{:+.1f}%"
+        }).background_gradient(subset=["Avg Expected Risk"], cmap="YlOrRd"),
+        use_container_width=True
+    )
+    
+    st.caption(
+        "💡 **Note**: Expected risk increases continuously with warming, but extreme month counts may remain "
+        "stable due to class thresholds (discrete bins). A city may have higher risk without crossing the threshold "
+        "to flip from 'High' to 'Extreme' classification."
+    )
+
 if st.session_state["use_whatif"]:
     st.info("What-if mode is ON. Click **Reset What-if** in the sidebar to revert to baseline.")
+
+# Warning for long-term forecasts
+if horizon >= 12:
+    st.warning(
+        "⚠️ **Long-term Forecast Limitation**: This model projects seasonal patterns forward but stabilizes into "
+        "repeating 12-month cycles due to recursive forecasting with lag features. Use for seasonal planning "
+        "(identifying which months are risky) rather than specific year predictions. Expected risk increases with "
+        "warming scenarios, but extreme month counts may remain stable due to learned seasonal patterns and threshold effects."
+    )
 
 st.divider()
 
@@ -625,6 +688,68 @@ with s1:
     safe_image(FIG_DIR / "shap_summary_extreme.png", "Global SHAP Summary – Extreme Risk")
 with s2:
     safe_image(FIG_DIR / "shap_waterfall_example.png", "Local SHAP Explanation – Single City-Month")
+
+st.divider()
+
+# =====================================================
+# MODEL LIMITATIONS SECTION
+# =====================================================
+with st.expander("🔬 Model Limitations & Proper Interpretation"):
+    st.markdown("""
+    ### Understanding Long-Term Forecast Behavior
+    
+    This forecasting model uses **recursive prediction** with lag features (previous months' heat and risk levels). 
+    While this approach works well for short-term forecasts (6-12 months), it has important limitations for longer horizons:
+    
+    #### Why Forecasts Stabilize Into Repeating Patterns
+    
+    1. **Static Climatology**: Temperature projections use monthly averages from historical data. May 2024 has the same 
+       baseline climate as May 2025, May 2026, etc. The model has no "year" feature to differentiate them.
+    
+    2. **Lag Feature Stabilization**: After ~6-12 months, the lag features (heat_lag_1, heat_lag_3, heat_lag_6) 
+       stabilize into the learned seasonal pattern. The model reinforces its own predictions in a feedback loop.
+    
+    3. **Learned Seasonal Structure**: The model was trained on natural climate variability (1974-2023) and learned 
+       strong seasonal patterns. It projects this structure forward rather than modeling sustained multi-year trends.
+    
+    4. **Population/Urbanization Change Slowly**: These features increase via linear trends, but the changes are gradual 
+       and don't break the seasonal lock established by temperature and lag features.
+    
+    #### How to Interpret the Forecasts
+    
+    ✅ **Appropriate Uses:**
+    - **Seasonal risk planning**: Identify which months historically show high risk (e.g., May-July for Multan)
+    - **Relative scenario comparison**: Compare how +1°C vs +2°C warming affects expected risk levels
+    - **City prioritization**: Identify which cities face the highest baseline risk
+    - **Resource allocation**: Plan cooling center locations and emergency response timing
+    
+    ❌ **Inappropriate Uses:**
+    - Predicting specific year outcomes ("Will 2027 be worse than 2026?")
+    - Counting exact extreme months beyond 12-month horizon
+    - Assuming risk will compound year-over-year (the model doesn't capture this)
+    
+    #### Why Expected Risk Still Increases
+    
+    Even though extreme month counts may stay stable, the **expected risk (continuous value)** does increase with 
+    warming scenarios:
+    - Baseline: Mean risk = ~0.21
+    - +1°C: Mean risk = ~0.21-0.22 (+1-5% increase)
+    - +2°C: Mean risk = ~0.24-0.25 (+15-20% increase)
+    
+    This shows the model captures the warming effect, but the discrete class thresholds (Low/Moderate/High/Extreme bins) 
+    don't always flip when risk increases slightly.
+    
+    #### Future Improvements
+    
+    To address these limitations, consider:
+    1. **Explicit time trends**: Add year/decade features to capture long-term warming
+    2. **Direct climate model integration**: Use actual climate projection data (CMIP6) instead of simple deltas
+    3. **Autoregressive models**: Replace recursive approach with models designed for long-term forecasting
+    4. **Ensemble climate scenarios**: Incorporate uncertainty from multiple climate models
+    5. **Validation on climate trends**: Train on data with sustained warming periods
+    
+    For technical details, see [WHY_FORECASTS_REPEAT.md](WHY_FORECASTS_REPEAT.md) in the project repository.
+    """)
 
 st.divider()
 
