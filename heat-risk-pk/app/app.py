@@ -57,8 +57,14 @@ def load_forecast(horizon: int, scenario_slug: str) -> pd.DataFrame:
             f"Missing forecast file:\n{path}\n\n"
             f"Expected files like:\n"
             f"- forecast_6m_baseline.csv\n"
+            f"- forecast_12m_baseline.csv\n"
+            f"- forecast_24m_baseline.csv\n"
+            f"- forecast_72m_baseline.csv (for 2030 projections)\n"
             f"- forecast_6m_plus1c.csv\n"
-            f"- forecast_6m_plus2c.csv"
+            f"- forecast_6m_plus2c.csv\n"
+            f"- forecast_72m_plus1c.csv\n"
+            f"- forecast_72m_plus2c.csv\n\n"
+            f"Run: python generate_forecasts.py"
         )
     return pd.read_csv(path)
 
@@ -85,22 +91,56 @@ def expected_risk_from_probs(df: pd.DataFrame, p_low, p_mod, p_high, p_extreme) 
 
 def extend_forecast_to_year(df_in: pd.DataFrame, target_end_year: int = 2030) -> pd.DataFrame:
     """
-    Extends forecast table to target_end_year by repeating last 12-month pattern per city.
+    Extends forecast table to target_end_year using seasonal averaging.
     This is a PoC projection layer to support long-horizon dashboards (2026–2030).
+    
+    IMPORTANT: 
+    - Only extends if the forecast horizon is >= 12 months.
+    - For shorter forecasts (6m), returns data as-is without artificial extension.
+    - Uses seasonal averaging to avoid unrealistic repetition of extreme values.
     """
     df = df_in.copy().sort_values(["city", "year", "month"])
+    
+    # Determine forecast horizon by checking a sample city
+    if not df.empty:
+        sample_city = df["city"].iloc[0]
+        sample_data = df[df["city"] == sample_city]
+        forecast_horizon = len(sample_data)
+        
+        # If forecast horizon < 12 months, don't extend beyond what we have
+        if forecast_horizon < 12:
+            # Still add date column for consistency
+            if "date" not in df.columns:
+                df["date"] = pd.to_datetime(df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2) + "-01")
+            return df
+    
     if int(df["year"].max()) >= target_end_year:
         if "date" not in df.columns:
             df["date"] = pd.to_datetime(df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2) + "-01")
         return df
 
+    # Mark original data
+    df["is_extended"] = False
+    
     out_chunks = [df]
     for city in df["city"].unique():
         d = df[df["city"] == city].copy().sort_values(["year", "month"])
         if d.empty:
             continue
 
-        pattern = d.tail(12).copy()
+        # Calculate seasonal averages from available data (last 12 months if available)
+        seasonal_avg = d.tail(12).groupby("month").agg({
+            "pred_risk": "mean",
+            "p_low": "mean",
+            "p_mod": "mean",
+            "p_high": "mean",
+            "p_extreme": "mean",
+            "heat_stress_index_proj": "mean",
+            "temp_delta_c": "mean",
+            "urban_delta_pct": "mean",
+            "pop_delta_mult": "mean"
+        }).to_dict(orient="index")
+        
         last_y = int(d.iloc[-1]["year"])
         last_m = int(d.iloc[-1]["month"])
 
@@ -110,12 +150,23 @@ def extend_forecast_to_year(df_in: pd.DataFrame, target_end_year: int = 2030) ->
             if m == 13:
                 y += 1
                 m = 1
-            src = pattern[pattern["month"] == m]
-            if src.empty:
-                src = pattern.tail(1)
-            row = src.iloc[0].to_dict()
+            
+            # Use seasonal average for this month
+            if m in seasonal_avg:
+                row = seasonal_avg[m].copy()
+            else:
+                # Fallback to last month's average
+                row = d.tail(1).iloc[0].to_dict()
+            
+            row["city"] = city
             row["year"] = y
             row["month"] = m
+            row["is_extended"] = True
+            
+            # Re-calculate pred_risk from probabilities to ensure consistency
+            probs = [row["p_low"], row["p_mod"], row["p_high"], row["p_extreme"]]
+            row["pred_risk"] = int(np.argmax(probs))
+            
             out_chunks.append(pd.DataFrame([row]))
 
     df_ext = pd.concat(out_chunks, ignore_index=True)
@@ -161,7 +212,7 @@ def safe_image(path: Path, caption: str):
 # =====================================================
 st.sidebar.title("🔧 Controls")
 
-horizon = st.sidebar.selectbox("Forecast Horizon (months)", [6, 12, 24], index=0)
+horizon = st.sidebar.selectbox("Forecast Horizon (months)", [6, 12, 24, 72], index=0)
 
 scenario_label = st.sidebar.selectbox(
     "Climate Scenario",
@@ -210,20 +261,6 @@ except Exception as e:
 
 # Build date
 df["date"] = pd.to_datetime(df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2) + "-01")
-
-# Extend to 2030 (PoC)
-st.sidebar.subheader("📅 Display Window")
-extend_to_2030 = st.sidebar.checkbox("Extend forecast to 2030 (PoC projection)", value=True)
-if extend_to_2030:
-    df = extend_forecast_to_year(df, 2030)
-
-st.sidebar.caption(f"Forecast years available (after extension): {int(df['year'].min())} → {int(df['year'].max())}")
-
-default_from = 2026 if int(df["year"].max()) >= 2026 else int(df["year"].min())
-year_from = st.sidebar.number_input("Show from year", value=default_from, step=1)
-year_to = st.sidebar.number_input("Show until year", value=int(df["year"].max()), step=1)
-
-df = df[(df["year"] >= year_from) & (df["year"] <= year_to)].copy()
 
 # base outputs
 df["risk_name"] = df["pred_risk"].map(RISK_LABELS)
