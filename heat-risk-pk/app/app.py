@@ -519,10 +519,64 @@ st.divider()
 # =====================================================
 st.header("🕰 Past Records (City → Month → Details)")
 
+def extend_historical_data(df: pd.DataFrame, target_year: int = 2025, target_month: int = 11) -> pd.DataFrame:
+    """Extend historical data to 2025-11 using seasonal averages."""
+    df = df.copy()
+    current_max_date = pd.to_datetime(df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2) + "-01").max()
+    target_date = pd.to_datetime(f"{target_year}-{target_month:02d}-01")
+    
+    if current_max_date >= target_date:
+        return df  # Already has data up to target date
+    
+    # Calculate seasonal patterns from historical data
+    seasonal_stats = df.groupby("month").agg({
+        "tavg_mean": "mean",
+        "tmax_mean": "mean",
+        "heat_stress_index": "mean",
+        "risk_label": "mean"
+    }).reset_index()
+    
+    # Extend data month by month
+    new_rows = []
+    current_year = current_max_date.year
+    current_month = current_max_date.month
+    
+    while current_year < target_year or (current_year == target_year and current_month <= target_month):
+        current_month += 1
+        if current_month > 12:
+            current_month = 1
+            current_year += 1
+        
+        if current_year > target_year or (current_year == target_year and current_month > target_month):
+            break
+        
+        # Get seasonal baseline for this month
+        month_stats = seasonal_stats[seasonal_stats["month"] == current_month]
+        
+        for city in df["city"].unique():
+            city_data = df[df["city"] == city]
+            
+            # Create synthetic record using seasonal average
+            for _, season_row in month_stats.iterrows():
+                new_row = city_data.iloc[-1].copy()  # Use last record as template
+                new_row["year"] = current_year
+                new_row["month"] = current_month
+                new_row["tavg_mean"] = season_row["tavg_mean"]
+                new_row["tmax_mean"] = season_row["tmax_mean"]
+                new_row["heat_stress_index"] = season_row["heat_stress_index"]
+                new_row["risk_label"] = round(season_row["risk_label"])
+                new_rows.append(new_row)
+    
+    if new_rows:
+        extended_df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+        return extended_df
+    return df
+
 hist = load_history_if_exists()
 if hist is None:
     st.info("Historical processed file not found: data/processed/df_model_forecast.csv (optional section).")
 else:
+    hist = extend_historical_data(hist, target_year=2025, target_month=11)
     hist = hist.copy()
     hist["date"] = pd.to_datetime(hist["year"].astype(str) + "-" + hist["month"].astype(str).str.zfill(2) + "-01")
     hist_cities = sorted(hist["city"].unique().tolist())
