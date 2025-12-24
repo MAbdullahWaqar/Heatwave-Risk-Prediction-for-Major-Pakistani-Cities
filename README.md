@@ -6,178 +6,180 @@ End-to-end ML decision-support system to **forecast urban heat stress risk** for
 - **Integrated dataset pipeline** (4 sources merged + feature engineering)
 - **ML pipeline** with baseline + multiple classical models + ensemble
 - **Model comparison** (metrics + confusion matrices + classification reports)
-- **Feature contribution** (Permutation importance / RF importances)
-- **Explainability** (SHAP global + local)
-- **Forecast generation** for multiple horizons and climate scenarios
-- **PoC Dashboard (Streamlit)**:
-  - Pakistan risk map
-  - Top cities at risk + downloads
-  - City drill-down with **past patterns + forecast**
-  - City comparison charts
-  - **What-if simulation sliders**
-  - Risk alerts
+# Urban Heat Stress Risk Forecasting — Pakistan (CS-245 Capstone)
+
+Comprehensive end-to-end project that builds a decision-support system to forecast monthly urban heat stress risk for major Pakistani cities. It includes data ingestion, preprocessing, feature engineering, training, evaluation, explainability, forecast generation for scenarios, and a Streamlit proof-of-concept dashboard.
+
+Repository root highlights
+
+- `heat-risk-pk/` : main project folder
+  - `app/app.py` : Streamlit dashboard
+  - `data/raw/` : original source files (weather, World Bank, surface temp)
+  - `data/processed/` : processed datasets used for modeling
+  - `models/` : trained model artifacts and feature column lists
+  - `outputs/forecasts/` : generated forecast CSVs (used by dashboard)
+  - `outputs/figures/` : evaluation, SHAP and importance plots
+  - `src/` : processing, modeling, evaluation, forecasting scripts
+  - `requirements.txt` : Python dependencies
 
 ---
 
-##  Project Structure
+## Quick summary — what the project does
 
-heat-risk-pk/
-├─ app/
-│ └─ app.py
-├─ data/
-│ ├─ raw/
-│ └─ processed/
-├─ models/
-├─ outputs/
-│ ├─ figures/
-│ └─ forecasts/
-├─ src/
-│ ├─ preprocess.py
-│ ├─ train.py
-│ ├─ evaluate.py
-│ ├─ explain.py
-│ └─ generate_forecasts.py
-├─ requirements.txt
-└─ README.md
-
-yaml
-Copy code
+- Builds a monthly city-level dataset from daily weather and national indicators
+- Computes a Heat Stress Index (HSI) and categorizes risk into 4 classes (Low/Moderate/High/Extreme)
+- Trains models for two operational tasks:
+  - Forecasting (climate-only HistGradientBoosting) — produces multi-month forecasts and scenarios
+  - Monitoring (Logistic Regression) — short-term alerts using recent observed labels (risk_lag_*)
+- Produces explainability artifacts (SHAP, permutation importance)
+- Exposes results in an interactive Streamlit dashboard with maps, timelines, scenario comparison and what-if sliders
 
 ---
 
-## 📦 Datasets Used (4 sources)
-1) **City daily weather (Pakistan cities)** → aggregated to monthly features (meteostat_data)
-2) **World Bank population density** (`API_EN.POP.DNST...csv`)  
-3) **World Bank urban population %** (`API_SP.URB...csv`)  
-4) **Average monthly surface temperature** (`average-monthly-surface-temperature.csv`)
+## Data sources (where to look)
 
+- City daily weather: `heat-risk-pk/data/raw/pakistan_city_weather_daily.csv`
+- World Bank population density: `heat-risk-pk/data/raw/API_EN.POP.DNST_DS2_en_csv_v2_110190.csv`
+- World Bank urban population %: `heat-risk-pk/data/raw/API_SP.URB.TOTL.IN.ZS_DS2_en_csv_v2_110318.csv`
+- Average monthly surface temperature: `heat-risk-pk/data/raw/average-monthly-surface-temperature.csv`
 
+Loader functions are in `src/io.py`.
 
 ---
 
-## ⚙️ Setup
+## How the pipeline works (high level)
 
-### Follow the following steps to Run this Project : Create environment & install dependencies
+1. Raw daily weather is aggregated to monthly city-level features (`src/preprocess.py`).
+2. World Bank and surface temperature sources are converted to year/month form and merged.
+3. Feature engineering adds:
+   - Seasonal encodings (`month_sin`, `month_cos`)
+   - City climatology and anomalies (`tavg_clim`, `tavg_anom`)
+   - Z-scored inputs used by the Heat Stress Index (HSI)
+4. Targets are created:
+   - HSI (weighted z-score combination) in `src/targets.py`
+   - Risk label via percentile bins (P50, P75, P90)
+5. Lag and rolling features (`heat_lag_*`, `risk_lag_*`, rolling means/stds) are produced in `src/split.py`.
+6. Two datasets are prepared:
+   - Climate-only forecast dataset: `data/processed/df_model_forecast.csv` (no `risk_lag_*`)
+   - Monitoring dataset: `data/processed/df_model_monitoring.csv` (includes `risk_lag_*`)
+
+---
+
+## Models and their roles
+
+- Forecast model (deployed for dashboard): `models/forecast_hgb.pkl`
+  - HistGradientBoosting classifier trained on climate-only features (no `risk_lag_*`).
+  - Used for multi-month projections and scenario comparisons.
+
+- Monitoring model: `models/monitoring_logreg.pkl`
+  - Logistic Regression pipeline (scaler + LR) trained on dataset that includes recent observed `risk_lag_*`.
+  - Intended for short-term monitoring/alerts where recent labels exist.
+
+- Explainability helper: `models/explain_rf.pkl` (Random Forest) used to compute SHAP summaries.
+
+Model definitions and pipelines live in `src/model_zoo.py` and training/evaluation in `src/train.py` and `src/evaluate.py`.
+
+---
+
+## Evaluation (key metrics)
+
+- Evaluation artifacts and confusion matrices are saved to `outputs/figures/`.
+- Example metrics (found at `outputs/figures/model_metrics.csv`):
+  - HGB (forecast): macro-F1 ≈ 0.90, accuracy ≈ 0.92
+  - Logistic Regression (monitoring): macro-F1 ≈ 0.91, accuracy ≈ 0.92 (benefits from `risk_lag_*`)
+
+Notes: LR performs well on monitoring because it leverages recent labels (`risk_lag_*`) — this is valid for alerting but would be label leakage for forward forecasting. HGB is the correct choice for forecasting because it does not require future labels.
+
+---
+
+## Reproducible run order (recommended)
+
+1) Create environment and install dependencies
+
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # mac/linux
-# .venv\Scripts\activate    # windows
+source .venv/bin/activate   # mac / linux
+# .venv\Scripts\activate   # windows
+pip install -r heat-risk-pk/requirements.txt
+```
 
-pip install -r requirements.txt
-▶️ Run Order (IMPORTANT)
-Step A — Preprocess & build ML table
-Generates processed datasets in data/processed/.
+2) Build processed datasets and model-ready tables
 
-bash
-Copy code
-python src/preprocess.py
-Step B — Train + evaluate models
-Saves trained models in models/ and metrics/figures in outputs/figures/.
+```bash
+python heat-risk-pk/src/train.py --build-only
+```
 
-bash
-Copy code
-python src/train.py
-python src/evaluate.py
-Step C — Explainability + feature importance (optional but recommended)
-Generates SHAP + feature importance images in outputs/figures/.
+Note: `src/train.py` includes `build_dataset()` which loads raw data via `src/io.py`, aggregates and merges sources, applies feature engineering and creates `data/processed/df_model_forecast.csv` and `df_model_monitoring.csv`.
 
-bash
-Copy code
-python src/explain.py
-Step D — Generate all forecast CSVs (6/12/24 × baseline/plus1c/plus2c)
-Creates 9 forecast files in outputs/forecasts/.
+3) Train models and save artifacts
 
-bash
-Copy code
-python src/generate_forecasts.py
-Step E — Run the Streamlit PoC
-bash
-Copy code
-streamlit run app/app.py
-📄 Expected Outputs
-Models (models/)
-forecast_hgb.pkl (deployed model)
+```bash
+python heat-risk-pk/src/train.py
+```
 
-feature_cols_forecast.pkl
+This trains monitoring and forecast models, saves `models/monitoring_logreg.pkl`, `models/forecast_hgb.pkl`, and writes `models/feature_cols_*.pkl`. It also saves processed CSVs to `data/processed/`.
 
-(optional) monitoring model + other artifacts
+4) Evaluate & produce figures (confusion matrices, metrics)
 
-metrics.json (optional notes)
+```bash
+python heat-risk-pk/src/evaluate.py
+```
 
-Forecasts (outputs/forecasts/)
-Generated by src/generate_forecasts.py:
+5) Generate forecasts (scenarios & horizons)
 
-forecast_6m_baseline.csv
+```bash
+python heat-risk-pk/src/forecast.py
+```
 
-forecast_12m_baseline.csv
+This creates forecast CSVs in `outputs/forecasts/` used by the Streamlit dashboard.
 
-forecast_24m_baseline.csv
+6) (Optional) Explainability & SHAP plots
 
-forecast_6m_plus1c.csv
+```bash
+python heat-risk-pk/src/explain.py
+```
 
-forecast_12m_plus1c.csv
+7) Run the dashboard
 
-forecast_24m_plus1c.csv
+```bash
+streamlit run heat-risk-pk/app/app.py
+```
 
-forecast_6m_plus2c.csv
+Open the displayed URL in your browser (usually `http://localhost:8501`).
 
-forecast_12m_plus2c.csv
+---
 
-forecast_24m_plus2c.csv
+## Dashboard notes
 
-Figures (outputs/figures/)
-model_metrics.csv
+- The dashboard reads forecast CSVs from `outputs/forecasts/` and figures from `outputs/figures/`.
+- It shows city maps, timelines, scenario comparisons (+1°C, +2°C), and live what-if adjustments (re-scoring; not retraining).
+- Long-horizon forecasts (≥12 months) are generated recursively and will stabilize into repeating seasonal cycles — see `src/forecast.py` and `Explanations/WHY_FORECASTS_REPEAT.md` for details.
 
-confusion matrices (png)
+---
 
-feature importance (png)
+## Troubleshooting
 
-SHAP plots (png)
+- Missing forecast files: run `python heat-risk-pk/src/forecast.py` to regenerate and verify `outputs/forecasts/`.
+- Missing trained model `.pkl`: run `python heat-risk-pk/src/train.py`.
+- Data memory/performance: consider running preprocessing on a machine with sufficient RAM; reduce sample size for a quick demo.
 
-🧪 Forecast Scenarios Supported
-Baseline
+---
 
-+1°C warming
+## Limitations & next steps
 
-+2°C warming
+- Long-horizon forecasts stabilize into seasonal cycles due to recursive lags and static climatology.
+- Surface temperature is national-level; city-scale climate projections would improve realism.
+- Future work: integrate CMIP6 projections, add explicit year/time-trend features, test LightGBM/XGBoost ensembles, calibrate classes against health outcomes.
 
-Forecast horizons:
+---
 
-6 months
+## Author
 
-12 months
-
-24 months
-
-🧠 Notes on What-If Simulation
-The Streamlit “What-if” sliders provide instant sensitivity analysis by re-scoring output probabilities.
-This is not retraining — it is an interactive PoC layer to demonstrate how risk changes under different assumptions.
-
-🛠 Troubleshooting
-“Missing forecast file … forecast_12m_plus2c.csv”
-Run:
-
-bash
-Copy code
-python src/generate_forecasts.py
-Then verify:
-
-bash
-Copy code
-ls outputs/forecasts
-“Could not find trained model .pkl”
-Ensure these exist in models/:
-
-forecast_hgb.pkl
-
-feature_cols_forecast.pkl
+- Muhammad Abdullah Waqar
 
 
+---
 
-👥 Authors
-Group members:
+For a detailed project report (with formulas, code references, and appendix), see `heat-risk-pk/ML_Project_Final_Report.pdf`
 
-Member 1: Muhammad Abdullah Waqar
-Member 2: Syed Ezn Abbas Zaidi
-Member 3: Muhammad Ali Usman
 

@@ -81,8 +81,3 @@ Potential Lives Saved:
    • Early warning systems reduce heat-related deaths by 1-15%
    • Pakistan: ~1,000 heat-related deaths annually
    • Even 5% reduction = ~50 lives saved
-
----
-✓ Notebook execution complete!
-✓ All results saved to: /Users/muhammadabdullahwaqar/Documents/Projects/Health_Intelligence_System/heat-risk-pk/outputs/evaluation_cv
-✓ Ready for PoC dashboard deployment and demo video

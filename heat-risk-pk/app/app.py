@@ -210,7 +210,7 @@ def safe_image(path: Path, caption: str):
 # =====================================================
 # Sidebar controls
 # =====================================================
-st.sidebar.title("🔧 Controls")
+st.sidebar.title("Controls")
 
 horizon = st.sidebar.selectbox("Forecast Horizon (months)", [6, 12, 24, 36, 48, 60, 72], index=0)
 
@@ -233,7 +233,7 @@ compare_cities = st.sidebar.multiselect(
     default=["Karachi", "Lahore", "Multan"]
 )
 
-st.sidebar.subheader("🧪 What-if Simulation (Instant)")
+st.sidebar.subheader("What-if Simulation (Instant)")
 temp_delta = st.sidebar.slider("Temperature delta (°C)", -1.0, 4.0, 0.0, 0.5)
 urban_delta = st.sidebar.slider("Urbanization delta (pp)", -5.0, 10.0, 0.0, 0.5)
 pop_mult = st.sidebar.slider("Population multiplier", 0.8, 1.5, 1.0, 0.05)
@@ -242,7 +242,7 @@ pop_mult = st.sidebar.slider("Population multiplier", 0.8, 1.5, 1.0, 0.05)
 if "use_whatif" not in st.session_state:
     st.session_state["use_whatif"] = False
 
-predict_now = st.sidebar.button("🚀 Predict Now", type="primary")
+predict_now = st.sidebar.button("Predict Now", type="primary")
 reset_whatif = st.sidebar.button("↩ Reset What-if")
 
 if predict_now:
@@ -289,7 +289,7 @@ else:
 # =====================================================
 # HEADER
 # =====================================================
-st.title("🔥 Urban Heat Stress Risk Forecasting – Pakistan")
+st.title(" Urban Heat Stress Risk Forecasting – Pakistan")
 st.markdown("""
 **End-to-end ML decision-support system** for forecasting urban heat stress risk  
 Includes: model comparison, explainability (SHAP), feature importance, interactive what-if simulation, and city risk monitoring.
@@ -337,7 +337,7 @@ for scen_name in ["baseline", "plus1c", "plus2c"]:
             pass  # Skip scenarios that fail to load
 
 if len(scenario_data) > 1:
-    st.subheader("📊 Scenario Impact Comparison")
+    st.subheader("Scenario Impact Comparison")
     comp_df = pd.DataFrame(scenario_data)
     
     # Calculate percentage changes from baseline
@@ -378,7 +378,7 @@ st.divider()
 # =====================================================
 # SECTION 1 — PAKISTAN RISK MAP
 # =====================================================
-st.header("🗺 Pakistan Urban Heat Stress Risk Map")
+st.header("Pakistan Urban Heat Stress Risk Map")
 
 map_df = (
     df_view.groupby("city")
@@ -424,7 +424,7 @@ st.divider()
 # =====================================================
 # SECTION 2 — TOP CITIES TABLE + INSIGHTS
 # =====================================================
-st.header("🏙 Top Cities at Risk")
+st.header("Top Cities at Risk")
 
 top = (
     df_view.groupby("city")
@@ -438,7 +438,7 @@ top = (
 
 st.dataframe(top.style.background_gradient(cmap="Reds"), use_container_width=True)
 
-st.markdown("### 🔎 Key Insights (Auto)")
+st.markdown("### Key Insights (Auto)")
 st.write(f"- **Highest average expected risk:** {top.index[0]} (avg={top.iloc[0]['avg_expected_risk']:.2f})")
 st.write(f"- **Highest max extreme probability:** {top['max_extreme_prob'].idxmax()} (max={top['max_extreme_prob'].max():.2f})")
 st.write(f"- **Total Extreme months across all cities (current view):** {int((df_view['pred_risk_view'] == 3).sum())}")
@@ -448,7 +448,7 @@ st.divider()
 # =====================================================
 # SECTION 3 — CITY DRILL-DOWN + TABLE (uses proper date axis)
 # =====================================================
-st.header("📈 City Risk Timeline")
+st.header("City Risk Timeline")
 
 if selected_city != "All Cities":
     city_df = df_view[df_view["city"] == selected_city].sort_values("date").copy()
@@ -484,7 +484,7 @@ st.divider()
 # =====================================================
 # SECTION 3B — CITY COMPARISON (Expected Risk + P(Extreme))
 # =====================================================
-st.header("📊 City Comparison")
+st.header("City Comparison")
 
 comp_df = df_view[df_view["city"].isin(compare_cities)].sort_values("date").copy()
 if len(comp_df) > 0:
@@ -517,7 +517,7 @@ st.divider()
 # =====================================================
 # SECTION 4 — PAST RECORDS (City->Record->Details) + REACTIVE GRAPHS
 # =====================================================
-st.header("🕰 Past Records (City → Month → Details)")
+st.header("Past Records (City → Month → Details)")
 
 def extend_historical_data(df: pd.DataFrame, target_year: int = 2025, target_month: int = 11) -> pd.DataFrame:
     """Extend historical data to 2025-11 using seasonal averages."""
@@ -651,7 +651,7 @@ st.divider()
 # =====================================================
 # SECTION 4B — PAST PATTERNS (Seasonality)
 # =====================================================
-st.header("🧾 Past Data Patterns (Seasonality)")
+st.header("Past Data Patterns (Seasonality)")
 
 hist2 = load_history_if_exists()
 if hist2 is None:
@@ -682,13 +682,13 @@ st.divider()
 # =====================================================
 # SECTION 5 — MODEL PERFORMANCE & SELECTION
 # =====================================================
-st.header("🧠 Model Performance & Selection")
+st.header("Model Performance & Selection")
 
 metrics = load_metrics()
 if metrics is None:
     st.warning("model_metrics.csv not found. Generate it from your evaluation script.")
 else:
-    st.dataframe(metrics.style.highlight_max(axis=0), use_container_width=True)
+    st.dataframe(metrics, use_container_width=True)
 
 st.markdown("""
 **Model Selection Criteria**
@@ -697,10 +697,10 @@ st.markdown("""
 - Selected model: **Climate-only Gradient Boosting / HGB (deployed for forecast)**
 """)
 
-notes = load_model_notes()
-if notes is not None:
-    with st.expander("Model Notes (metrics.json)"):
-        st.json(notes)
+# notes = load_model_notes()
+# if notes is not None:
+#     with st.expander("Model Notes (metrics.json)"):
+#         st.json(notes)
 
 st.subheader("Confusion Matrices")
 cm_cols = st.columns(3)
@@ -718,7 +718,7 @@ st.divider()
 # =====================================================
 # SECTION 6 — FEATURE IMPORTANCE
 # =====================================================
-st.header("🔍 Feature Contribution Analysis")
+st.header("Feature Contribution Analysis")
 
 c1, c2 = st.columns(2)
 
@@ -735,7 +735,7 @@ st.divider()
 # =====================================================
 # SECTION 7 — SHAP EXPLAINABILITY
 # =====================================================
-st.header("🧩 Model Explainability (SHAP)")
+st.header("Model Explainability (SHAP)")
 
 s1, s2 = st.columns(2)
 with s1:
@@ -748,7 +748,7 @@ st.divider()
 # =====================================================
 # MODEL LIMITATIONS SECTION
 # =====================================================
-with st.expander("🔬 Model Limitations & Proper Interpretation"):
+with st.expander("Model Limitations & Proper Interpretation"):
     st.markdown("""
     ### Understanding Long-Term Forecast Behavior
     
@@ -802,20 +802,8 @@ with st.expander("🔬 Model Limitations & Proper Interpretation"):
     4. **Ensemble climate scenarios**: Incorporate uncertainty from multiple climate models
     5. **Validation on climate trends**: Train on data with sustained warming periods
     
-    For technical details, see [WHY_FORECASTS_REPEAT.md](WHY_FORECASTS_REPEAT.md) in the project repository.
+   
     """)
 
 st.divider()
 
-# =====================================================
-# FOOTER
-# =====================================================
-st.markdown("""
----
-### 📌 Project Summary
-- **Task:** Urban Heat Stress Risk Forecasting (Pakistan Cities)
-- **Data:** 4 public heterogeneous sources (weather + population density + urbanization + surface temp)
-- **Models:** Baseline + classical ML + ensemble + explainability (SHAP)
-- **PoC:** Interactive dashboard with maps, comparisons, historical drill-down, and what-if simulation
-- **Course:** CS-245 Machine Learning Capstone
-""")
