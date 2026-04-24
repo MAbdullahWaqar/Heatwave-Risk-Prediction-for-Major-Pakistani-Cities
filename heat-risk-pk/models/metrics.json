@@ -1,14 +1,28 @@
 {
   "monitoring_logreg": {
-    "macro_f1": 0.9152894056847545,
-    "accuracy": 0.9290123456790124
+    "macro_f1": 0.9093193599278793,
+    "accuracy": 0.9259259259259259
   },
-  "forecast_hgb": {
-    "macro_f1": 0.8000658126809825,
+  "forecast_model": {
+    "type": "HybridCNNLSTM",
+    "macro_f1": 0.807029885317823,
     "accuracy": 0.8364197530864198
+  },
+  "split_counts": {
+    "monitoring": {
+      "train": 3475,
+      "val": 306,
+      "test": 324
+    },
+    "forecast": {
+      "train": 3475,
+      "val": 306,
+      "test": 324
+    }
   },
   "notes": {
     "monitoring_model": "Uses risk_lag_* features; best for monitoring/alerts",
-    "forecast_model": "Climate-only; best for forward scenario forecasting"
+    "forecast_model": "Climate + pruned humidity/NDVI production features. Type: DL (HybridCNNLSTM)",
+    "dl_note": "DL architecture provides neural network backbone for deep learning project. Performance may vary from tree-based baseline."
   }
 }

@@ -12,9 +12,16 @@ RANDOM_SEED = 42
 
 # Files (raw)
 WEATHER_FILE = "pakistan_city_weather_daily.csv"
+HUMIDITY_FILE = "pakistan_humidity_daily.csv"
+NDVI_FILE = "pakistan_ndvi_monthly.csv"
 POP_DENSITY_FILE = "API_EN.POP.DNST_DS2_en_csv_v2_110190.csv"
 URBAN_PCT_FILE = "API_SP.URB.TOTL.IN.ZS_DS2_en_csv_v2_110318.csv"
 SURFACE_TEMP_FILE = "average-monthly-surface-temperature.csv"
+
+# Humidity feature engineering settings
+HUMIDITY_WINSOR_LOW = 0.01
+HUMIDITY_WINSOR_HIGH = 0.99
+HUMIDITY_EXTREME_PRCP_Q = 0.95
 
 # Cities selection thresholds
 MIN_MONTHS_PER_CITY = 600

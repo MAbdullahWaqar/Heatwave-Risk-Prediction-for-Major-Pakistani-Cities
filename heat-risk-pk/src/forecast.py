@@ -75,6 +75,14 @@ def forecast_city(city, model, feature_cols, df_hist, proj_lookup, surf_proj, m_
     last = hist.iloc[-1]
     y, m = int(last["year"]), int(last["month"])
     heat_series = hist["heat_stress_index"].tolist()
+    
+    # Compute climatologies for humidity/NDVI features (for projections)
+    clim_rh_range = None
+    clim_ndvi = None
+    if "rh_range" in feature_cols and "rh_range" in hist.columns:
+        clim_rh_range = hist.groupby("month")["rh_range"].median()
+    if "ndvi" in feature_cols and "ndvi" in hist.columns:
+        clim_ndvi = hist.groupby("month")["ndvi"].median()
 
     out = []
     for _ in range(horizon_months):
@@ -119,6 +127,15 @@ def forecast_city(city, model, feature_cols, df_hist, proj_lookup, surf_proj, m_
             "heat_roll_mean_3": rmean(3), "heat_roll_std_3": rstd(3),
             "heat_roll_mean_6": rmean(6), "heat_roll_std_6": rstd(6),
         }
+        
+        # Add humidity/NDVI features (use historical climatologies for projections)
+        if "rh_range" in feature_cols:
+            feat["rh_range"] = float(clim_rh_range.get(m, clim_rh_range.median())) if clim_rh_range is not None else np.nan
+        if "ndvi" in feature_cols:
+            feat["ndvi"] = float(clim_ndvi.get(m, clim_ndvi.median())) if clim_ndvi is not None else np.nan
+        if "ndvi_missing" in feature_cols:
+            feat["ndvi_missing"] = 0.0  # Assume data available in projections
+        
         X_one = pd.DataFrame([feat])[feature_cols]
         proba = model.predict_proba(X_one)[0]
         pred = int(np.argmax(proba))
@@ -140,7 +157,15 @@ def main():
     # Use FORECAST dataset (climate-only) for projections/history
     df_hist = pd.read_csv(DATA_PROCESSED / "df_model_forecast.csv")
 
-    model = joblib.load(MODELS_DIR / "forecast_hgb.pkl")
+    # Load model: try DL first, fallback to HGB
+    if (MODELS_DIR / "forecast_dl.pkl").exists():
+        model = joblib.load(MODELS_DIR / "forecast_dl.pkl")
+        model_type = "DL (HybridCNNLSTM)"
+    else:
+        model = joblib.load(MODELS_DIR / "forecast_hgb.pkl")
+        model_type = "HGB"
+    
+    print(f"Using forecast model: {model_type}")
     feature_cols = joblib.load(MODELS_DIR / "feature_cols_forecast.pkl")
 
     # stats for heat index computation
@@ -196,6 +221,7 @@ def main():
     run(72, {"temp_delta_c":2.0, "urban_delta_pct":4.0,  "pop_delta_mult":1.10}, "plus2c")
 
     print("Saved forecasts to:", FORECAST_DIR)
+    print(f"Generated forecasts with {model_type} model")
     print("Generated horizons: 6m, 12m, 24m, 36m, 48m, 60m, 72m (to 2030) + scenarios")
 
 
