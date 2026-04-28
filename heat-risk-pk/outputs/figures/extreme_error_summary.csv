@@ -1,0 +1,2 @@
+total_samples,total_extreme_true,tp_extreme,fn_extreme,fp_extreme,tn_non_extreme,miss_rate_extreme,false_alarm_rate_extreme,precision_extreme,recall_extreme,val_accuracy
+247,51,47,4,2,194,0.0784313725490196,0.04081632653061224,0.9591836734693877,0.9215686274509803,

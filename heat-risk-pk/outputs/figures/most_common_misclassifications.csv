@@ -1,0 +1,4 @@
+from_class,to_class,count,pct_of_errors
+Moderate,High,8,33.3
+Moderate,Low,4,16.7
+High,Moderate,4,16.7

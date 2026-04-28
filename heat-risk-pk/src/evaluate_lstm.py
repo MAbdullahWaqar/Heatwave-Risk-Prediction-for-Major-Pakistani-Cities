@@ -109,6 +109,18 @@ def _predict_batches(
     return np.concatenate(preds)
 
 
+def _month_to_period(m: int) -> str:
+    if m in (11, 12, 1, 2):
+        return "Winter (Nov-Feb)"
+    if m in (3, 4):
+        return "Spring (Mar-Apr)"
+    if m in (5, 6, 7):
+        return "Peak Summer (May-Jul)"
+    if m in (8, 9):
+        return "Monsoon (Aug-Sep)"
+    return "Autumn (Oct)"
+
+
 def evaluate_lstm(checkpoint_name: str | None = None) -> pd.DataFrame:
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     ck_name = checkpoint_name or SEQUENCE_CHECKPOINT_NAME
@@ -174,6 +186,7 @@ def evaluate_lstm(checkpoint_name: str | None = None) -> pd.DataFrame:
     baseline_pred = np.full_like(y_test, fill_value=baseline_class)
 
     pred = _predict_batches(model, X_test, c_test, device)
+    idx_to_city = {int(v): str(k) for k, v in city_to_idx.items()}
 
     def metrics_row(name: str, y_true, y_p) -> dict:
         return {
@@ -218,6 +231,199 @@ def evaluate_lstm(checkpoint_name: str | None = None) -> pd.DataFrame:
     (FIG_DIR / "best_model.txt").write_text(best.to_string())
     print(metrics.to_string(index=False))
     print("\nBEST (selection rule: macro_f1, extreme_recall, accuracy):\n", best.to_string())
+
+    # City-wise evaluation summary for frontend table.
+    def _city_notes(acc: float, extreme_rec: float) -> tuple[str, str]:
+        if acc >= 0.93 and extreme_rec >= 0.85:
+            return (
+                "Stable seasonal pattern; model confidence high.",
+                "Low risk: keep routine monitoring.",
+            )
+        if extreme_rec < 0.20:
+            return (
+                "Rare/extreme events under-detected in this city.",
+                "Lower extreme threshold or add city-specific tuning.",
+            )
+        if acc < 0.80:
+            return (
+                "High seasonal variability and class overlap.",
+                "Add city-specific features and monitor transition months.",
+            )
+        if acc < 0.90:
+            return (
+                "Moderate misclassification near class boundaries.",
+                "Focus monitoring around seasonal transition periods.",
+            )
+        return (
+            "Good overall fit with occasional boundary errors.",
+            "Maintain current model; review edge cases quarterly.",
+        )
+
+    city_rows = []
+    c_test_s = pd.Series(c_test).astype(int)
+    y_true_s = pd.Series(y_test).astype(int)
+    y_pred_s = pd.Series(pred).astype(int)
+    for cidx in sorted(c_test_s.unique().tolist()):
+        m = c_test_s == cidx
+        yt = y_true_s[m].to_numpy()
+        yp = y_pred_s[m].to_numpy()
+        acc = float(accuracy_score(yt, yp))
+        macro = float(f1_score(yt, yp, average="macro", zero_division=0))
+        ext_rec = float(
+            recall_score((yt == 3).astype(int), (yp == 3).astype(int), zero_division=0)
+        )
+        challenge, recommendation = _city_notes(acc, ext_rec)
+        city_rows.append(
+            {
+                "city": idx_to_city.get(int(cidx), f"city_{cidx}"),
+                "samples": int(m.sum()),
+                "accuracy": acc,
+                "macro_f1": macro,
+                "extreme_recall": ext_rec,
+                "challenge": challenge,
+                "recommendation": recommendation,
+            }
+        )
+    city_df = pd.DataFrame(city_rows).sort_values("accuracy", ascending=False).reset_index(drop=True)
+    city_df.to_csv(FIG_DIR / "city_wise_accuracy.csv", index=False)
+
+    # Most common misclassifications for frontend error analysis cards.
+    cm = pd.crosstab(
+        pd.Series(y_test, name="true"),
+        pd.Series(pred, name="pred"),
+        dropna=False,
+    ).reindex(index=range(4), columns=range(4), fill_value=0)
+    total_err = int((pred != y_test).sum())
+    pair_rows = []
+    if total_err > 0:
+        for t in range(4):
+            for p_ in range(4):
+                if t == p_:
+                    continue
+                cnt = int(cm.loc[t, p_])
+                if cnt <= 0:
+                    continue
+                pair_rows.append(
+                    {
+                        "from_class": LABEL_NAMES[t],
+                        "to_class": LABEL_NAMES[p_],
+                        "count": cnt,
+                        "pct_of_errors": round(100.0 * cnt / total_err, 1),
+                    }
+                )
+    pair_df = pd.DataFrame(pair_rows).sort_values("count", ascending=False).head(3).reset_index(drop=True)
+    if len(pair_df) > 0:
+        pair_df.to_csv(FIG_DIR / "most_common_misclassifications.csv", index=False)
+    else:
+        pd.DataFrame(
+            columns=["from_class", "to_class", "count", "pct_of_errors"]
+        ).to_csv(FIG_DIR / "most_common_misclassifications.csv", index=False)
+
+    # Binary error summary for Extreme class (used by frontend temporal cards).
+    is_ext_true = (y_test == 3).astype(int)
+    is_ext_pred = (pred == 3).astype(int)
+    tp = int(((is_ext_true == 1) & (is_ext_pred == 1)).sum())
+    fn = int(((is_ext_true == 1) & (is_ext_pred == 0)).sum())
+    fp = int(((is_ext_true == 0) & (is_ext_pred == 1)).sum())
+    tn = int(((is_ext_true == 0) & (is_ext_pred == 0)).sum())
+    total_ext = int(is_ext_true.sum())
+    total_non_ext = int((is_ext_true == 0).sum())
+    miss_rate = float(fn / max(total_ext, 1))
+    false_alarm_rate = float(fp / max((tp + fp), 1))
+    precision_ext = float(tp / max((tp + fp), 1))
+    recall_ext = float(tp / max((tp + fn), 1))
+    binary_df = pd.DataFrame(
+        [
+            {
+                "total_samples": int(len(y_test)),
+                "total_extreme_true": total_ext,
+                "tp_extreme": tp,
+                "fn_extreme": fn,
+                "fp_extreme": fp,
+                "tn_non_extreme": tn,
+                "miss_rate_extreme": miss_rate,
+                "false_alarm_rate_extreme": false_alarm_rate,
+                "precision_extreme": precision_ext,
+                "recall_extreme": recall_ext,
+                "val_accuracy": float(np.nan),  # optional placeholder for later extensions
+            }
+        ]
+    )
+    binary_df.to_csv(FIG_DIR / "extreme_error_summary.csv", index=False)
+
+    # Class-specific performance summary for frontend cards.
+    class_rows = []
+    for cls in range(4):
+        yt_bin = (y_test == cls).astype(int)
+        yp_bin = (pred == cls).astype(int)
+        support = int(yt_bin.sum())
+        acc_cls = float((yt_bin == yp_bin).mean())
+        rec_cls = float(recall_score(yt_bin, yp_bin, zero_division=0))
+        prec_cls = float(precision_score(yt_bin, yp_bin, zero_division=0))
+        err_rate = 1.0 - rec_cls
+        if cls == 0:
+            notes = "Lowest-risk class; often confused around seasonal transitions."
+        elif cls == 1:
+            notes = "Intermediate class with widest overlap to Low/High."
+        elif cls == 2:
+            notes = "Boundary overlap with Moderate and Extreme months."
+        else:
+            notes = "Critical class; extreme-event detection quality."
+        class_rows.append(
+            {
+                "class_id": cls,
+                "class_name": LABEL_NAMES[cls],
+                "data_share_pct": round(100.0 * support / len(y_test), 1),
+                "support": support,
+                "accuracy": acc_cls,
+                "recall": rec_cls,
+                "precision": prec_cls,
+                "error_rate": err_rate,
+                "notes": notes,
+            }
+        )
+    pd.DataFrame(class_rows).to_csv(FIG_DIR / "class_specific_performance.csv", index=False)
+
+    # Temporal error patterns by season-like periods.
+    test_seq = test_df.copy()
+    test_seq["_month_int"] = test_seq["month"].astype(int)
+    # Sequence label corresponds to end-of-window row.
+    seq_meta = []
+    for _, g in test_seq.groupby("city"):
+        g = g.sort_values("date")
+        if len(g) < seq_len:
+            continue
+        for t in range(seq_len - 1, len(g)):
+            seq_meta.append({"month": int(g.iloc[t]["_month_int"])})
+    meta_df = pd.DataFrame(seq_meta)
+    if len(meta_df) == len(y_test):
+        meta_df["y_true"] = y_test
+        meta_df["y_pred"] = pred
+        meta_df["period"] = meta_df["month"].map(_month_to_period)
+        trows = []
+        for p_name, g in meta_df.groupby("period"):
+            acc_p = float((g["y_true"] == g["y_pred"]).mean())
+            miss_ext = float(
+                ((g["y_true"] == 3) & (g["y_pred"] != 3)).sum() / max((g["y_true"] == 3).sum(), 1)
+            )
+            if acc_p >= 0.9:
+                note = "Consistent patterns; relatively easier predictions."
+            elif miss_ext > 0.4:
+                note = "Higher extreme miss rate; monitor warning thresholds."
+            else:
+                note = "Moderate overlap between adjacent classes."
+            trows.append(
+                {
+                    "period": p_name,
+                    "samples": int(len(g)),
+                    "accuracy": acc_p,
+                    "extreme_miss_rate": miss_ext,
+                    "notes": note,
+                }
+            )
+        pd.DataFrame(trows).sort_values("accuracy", ascending=False).to_csv(
+            FIG_DIR / "temporal_error_patterns.csv", index=False
+        )
 
     try:
         imp = _gradient_input_importance(model, X_test, c_test, feature_cols, device)

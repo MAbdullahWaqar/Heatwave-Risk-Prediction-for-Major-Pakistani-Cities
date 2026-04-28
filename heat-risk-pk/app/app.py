@@ -77,6 +77,31 @@ def load_metrics() -> pd.DataFrame | None:
     path = FIG_DIR / "model_metrics.csv"
     return pd.read_csv(path) if path.exists() else None
 
+
+@st.cache_data
+def load_model_selection_scores() -> pd.DataFrame:
+    """
+    Preferred source: notebook export if available.
+    Fallback: known architecture comparison scores from training run.
+    """
+    p1 = FIG_DIR / "gru_training_summary.csv"
+    p2 = ROOT / "models" / "deep_learning" / "dl_model_comparison.csv"
+    for p in (p1, p2):
+        if p.exists():
+            df = pd.read_csv(p)
+            if {"model", "best_val_macro_f1"}.issubset(df.columns):
+                return df[["model", "best_val_macro_f1"]].sort_values(
+                    "best_val_macro_f1", ascending=False
+                ).reset_index(drop=True)
+
+    return pd.DataFrame(
+        {
+            "model": ["GRU_Attn", "LSTM_Attn", "TCN", "Transformer"],
+            "best_val_macro_f1": [0.906831, 0.879589, 0.871994, 0.286878],
+        }
+    )
+
+
 @st.cache_data
 def load_history_if_exists() -> pd.DataFrame | None:
     path = DATA_PROCESSED / "df_model_forecast.csv"
@@ -192,7 +217,51 @@ def _ensure_prob_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def apply_whatif_rescore(df: pd.DataFrame, temp_delta: float, urban_delta: float, pop_mult: float) -> pd.DataFrame:
+def _city_vulnerability_factors(df_hist: pd.DataFrame | None, cities: pd.Series) -> pd.Series:
+    """
+    Build a per-city multiplier so what-if slider changes do not affect all cities equally.
+    Uses available historical context; falls back to 1.0 if history is missing.
+    """
+    if df_hist is None or df_hist.empty:
+        return pd.Series(1.0, index=cities.index)
+
+    h = df_hist.copy()
+    if "city" not in h.columns:
+        return pd.Series(1.0, index=cities.index)
+    h["city"] = h["city"].astype(str).str.strip()
+
+    use_cols = [c for c in ["urban_pct", "pop_density", "heat_stress_index"] if c in h.columns]
+    if not use_cols:
+        return pd.Series(1.0, index=cities.index)
+
+    city_ctx = h.groupby("city")[use_cols].mean(numeric_only=True)
+    score = pd.Series(0.0, index=city_ctx.index)
+    if "urban_pct" in city_ctx.columns:
+        u = city_ctx["urban_pct"]
+        score += 0.45 * ((u - u.mean()) / (u.std(ddof=0) + 1e-9))
+    if "pop_density" in city_ctx.columns:
+        p = city_ctx["pop_density"]
+        score += 0.35 * ((p - p.mean()) / (p.std(ddof=0) + 1e-9))
+    if "heat_stress_index" in city_ctx.columns:
+        hs = city_ctx["heat_stress_index"]
+        score += 0.20 * ((hs - hs.mean()) / (hs.std(ddof=0) + 1e-9))
+
+    # 0.75..1.45 roughly; clips prevent unstable overreaction.
+    factor = (1.0 + 0.30 * np.tanh(score)).clip(0.75, 1.45)
+    return cities.map(factor).fillna(1.0)
+
+
+def apply_whatif_rescore(
+    df: pd.DataFrame,
+    temp_delta: float,
+    urban_delta: float,
+    pop_mult: float,
+    humidity_delta: float,
+    precip_delta: float,
+    vegetation_delta: float,
+    wind_delta: float,
+    df_hist: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """
     Instant what-if sensitivity layer on top of **GRU** forecast class probabilities (`p_*`).
     Heuristic only — does not re-run the torch model. Stronger than before so sliders move
@@ -200,17 +269,27 @@ def apply_whatif_rescore(df: pd.DataFrame, temp_delta: float, urban_delta: float
     """
     df2 = _ensure_prob_columns(df)
 
-    # ~(-0.95, 0.95): warmer sliders → positive stress → more mass on high/extreme
-    stress = float(
-        np.tanh(
-            0.58
-            * (
-                0.52 * float(temp_delta)
-                + 0.07 * float(urban_delta)
-                + 0.92 * (float(pop_mult) - 1.0)
-            )
-        )
+    # Base stress from user controls; signs reflect general heat-risk tendency:
+    # temp/humidity/urban/pop increase risk, while precipitation/vegetation/wind reduce risk.
+    base_stress = (
+        0.52 * float(temp_delta)
+        + 0.07 * float(urban_delta)
+        + 0.92 * (float(pop_mult) - 1.0)
+        + 0.030 * float(humidity_delta)
+        - 0.020 * float(precip_delta)
+        - 1.20 * float(vegetation_delta)
+        - 0.050 * float(wind_delta)
     )
+
+    city_factor = _city_vulnerability_factors(df_hist, df2["city"])
+    if "heat_stress_index_proj" in df2.columns:
+        hs = pd.to_numeric(df2["heat_stress_index_proj"], errors="coerce").fillna(0.0)
+        hs_z = (hs - hs.mean()) / (hs.std(ddof=0) + 1e-9)
+        local_amp = (1.0 + 0.12 * np.tanh(hs_z)).clip(0.85, 1.20)
+    else:
+        local_amp = 1.0
+
+    stress = np.tanh(0.58 * base_stress * city_factor * local_amp)
     df2["p_extreme_adj"] = np.clip(df2["p_extreme"] + 0.52 * stress, 0.0, 1.0)
     take = df2["p_extreme_adj"] - df2["p_extreme"]
 
@@ -263,8 +342,9 @@ compare_cities = st.sidebar.multiselect(
 
 st.sidebar.subheader("What-if on GRU outputs (instant)")
 st.sidebar.caption(
-    "Rescores **saved** GRU class probabilities. Click **Predict Now**, move sliders (try **+2 °C** or **+1.1× pop**), "
-    "then watch **map colour** (expected risk 0–3) and charts. **Reset** turns what-if off."
+    "Rescores **saved** GRU class probabilities with climate/urban/eco controls. "
+    "After **Predict Now**, move temperature, humidity, precipitation, vegetation and other sliders; "
+    "city risk updates immediately in map/table/charts. **Reset** turns what-if off."
 )
 
 if "use_whatif" not in st.session_state:
@@ -274,7 +354,15 @@ if "use_whatif" not in st.session_state:
 reset_whatif = st.sidebar.button("↩ Reset What-if")
 if reset_whatif:
     st.session_state["use_whatif"] = False
-    for _wk in ("whatif_temp_delta", "whatif_urban_delta", "whatif_pop_mult"):
+    for _wk in (
+        "whatif_temp_delta",
+        "whatif_urban_delta",
+        "whatif_pop_mult",
+        "whatif_humidity_delta",
+        "whatif_precip_delta",
+        "whatif_vegetation_delta",
+        "whatif_wind_delta",
+    ):
         st.session_state.pop(_wk, None)
     st.rerun()
 
@@ -292,6 +380,18 @@ urban_delta = st.sidebar.slider(
 )
 pop_mult = st.sidebar.slider(
     "Population multiplier", 0.8, 1.5, 1.0, 0.05, key="whatif_pop_mult"
+)
+humidity_delta = st.sidebar.slider(
+    "Humidity delta (%)", -20.0, 30.0, 0.0, 1.0, key="whatif_humidity_delta"
+)
+precip_delta = st.sidebar.slider(
+    "Precipitation delta (%)", -60.0, 80.0, 0.0, 2.0, key="whatif_precip_delta"
+)
+vegetation_delta = st.sidebar.slider(
+    "Vegetation (NDVI) delta", -0.30, 0.30, 0.0, 0.01, key="whatif_vegetation_delta"
+)
+wind_delta = st.sidebar.slider(
+    "Wind speed delta (m/s)", -3.0, 3.0, 0.0, 0.1, key="whatif_wind_delta"
 )
 
 predict_now = st.sidebar.button("Predict Now", type="primary")
@@ -328,7 +428,17 @@ df["expected_risk"] = expected_risk_from_probs(df, df["p_low"], df["p_mod"], df[
 # What-if view (df_view): after **Predict Now**, heuristic rescoring of GRU probs using slider deltas
 df_view = df.copy()
 if _whatif_active:
-    df_view = apply_whatif_rescore(df_view, temp_delta, urban_delta, pop_mult)
+    df_view = apply_whatif_rescore(
+        df_view,
+        temp_delta,
+        urban_delta,
+        pop_mult,
+        humidity_delta,
+        precip_delta,
+        vegetation_delta,
+        wind_delta,
+        df_hist=load_history_if_exists(),
+    )
     df_view["pred_risk_view"] = df_view["pred_risk_adj"]
     df_view["risk_name_view"] = df_view["risk_name_adj"]
     df_view["expected_risk_view"] = df_view["expected_risk_adj"]
@@ -366,59 +476,11 @@ k3.metric(
 )
 k4.metric("Max P(Extreme)", f"{df_view['p_extreme_view'].max():.2f}")
 
-# =====================================================
-# SCENARIO COMPARISON TABLE (if multiple scenarios loaded)
-# =====================================================
-# Build scenario comparison by checking which scenarios are available
-scenario_data = []
-for scen_name in ["baseline", "plus1c", "plus2c"]:
-    fname = f"forecast_{horizon}m_{scen_name}.csv"
-    path = FORECAST_DIR / fname
-    if path.exists():
-        try:
-            df_scen = load_forecast(horizon, scen_name)
-            if df_scen is not None and len(df_scen) > 0:
-                # Calculate expected risk for this scenario
-                df_scen["expected_risk"] = expected_risk_from_probs(
-                    df_scen, df_scen["p_low"], df_scen["p_mod"], df_scen["p_high"], df_scen["p_extreme"]
-                )
-                scenario_data.append({
-                    "Scenario": {
-                        "baseline": "Baseline (No Change)",
-                        "plus1c": "+1°C Warming",
-                        "plus2c": "+2°C Warming"
-                    }[scen_name],
-                    "Avg Expected Risk": df_scen["expected_risk"].mean(),
-                    "Extreme Months (Total)": int((df_scen["pred_risk"] == 3).sum()),
-                    "Cities w/ Extreme Risk": int((df_scen["pred_risk"] == 3).groupby(df_scen["city"]).any().sum())
-                })
-        except Exception as e:
-            pass  # Skip scenarios that fail to load
-
-if len(scenario_data) > 1:
-    st.subheader("Scenario Impact Comparison")
-    comp_df = pd.DataFrame(scenario_data)
-    
-    # Calculate percentage changes from baseline
-    if len(comp_df) >= 2:
-        baseline_risk = comp_df.loc[comp_df["Scenario"] == "Baseline (No Change)", "Avg Expected Risk"].values[0]
-        comp_df["Risk Change (%)"] = ((comp_df["Avg Expected Risk"] - baseline_risk) / baseline_risk * 100).round(1)
-    
-    st.dataframe(
-        comp_df.style.format({
-            "Avg Expected Risk": "{:.3f}",
-            "Extreme Months (Total)": "{:.0f}",
-            "Cities w/ Extreme Risk": "{:.0f}",
-            "Risk Change (%)": "{:+.1f}%"
-        }).background_gradient(subset=["Avg Expected Risk"], cmap="YlOrRd"),
-        use_container_width=True
-    )
-    
-    st.caption(
-        "💡 **Note**: Expected risk increases continuously with warming, but extreme month counts may remain "
-        "stable due to class thresholds (discrete bins). A city may have higher risk without crossing the threshold "
-        "to flip from 'High' to 'Extreme' classification."
-    )
+st.caption(
+    "💡 **Note**: Expected risk increases continuously with warming, but extreme month counts may remain "
+    "stable due to class thresholds (discrete bins). A city may have higher risk without crossing the threshold "
+    "to flip from 'High' to 'Extreme' classification."
+)
 
 if _whatif_active:
     st.info(
@@ -489,7 +551,12 @@ view_state = pdk.ViewState(
     pitch=0,
 )
 
-_deck_key = f"deck_{horizon}_{scenario}_{_whatif_active}_{temp_delta:.4f}_{urban_delta:.4f}_{pop_mult:.4f}_{map_df['circle_radius_m'].sum():.1f}"
+_deck_key = (
+    f"deck_{horizon}_{scenario}_{_whatif_active}_"
+    f"{temp_delta:.4f}_{urban_delta:.4f}_{pop_mult:.4f}_"
+    f"{humidity_delta:.4f}_{precip_delta:.4f}_{vegetation_delta:.4f}_{wind_delta:.4f}_"
+    f"{map_df['circle_radius_m'].sum():.1f}"
+)
 st.pydeck_chart(
     pdk.Deck(
         layers=[layer],
@@ -799,7 +866,19 @@ if metrics is None:
     )
 else:
     st.subheader("Test metrics (`model_metrics.csv`)")
-    st.dataframe(metrics, use_container_width=True)
+    metrics_view = metrics.copy()
+    if "model" in metrics_view.columns:
+        metrics_view = metrics_view[metrics_view["model"] != "baseline_majority"].reset_index(drop=True)
+    st.dataframe(metrics_view, use_container_width=True)
+
+st.subheader("Model selection candidates (validation macro-F1)")
+sel_df = load_model_selection_scores()
+st.dataframe(
+    sel_df.style.format({"best_val_macro_f1": "{:.6f}"}).background_gradient(
+        subset=["best_val_macro_f1"], cmap="YlOrRd"
+    ),
+    use_container_width=True,
+)
 
 if "forecast_model" in df.columns:
     ck = str(df["forecast_checkpoint"].iloc[0]) if "forecast_checkpoint" in df.columns else ""
@@ -835,6 +914,36 @@ safe_image(
 st.caption(
     "Optional **Kernel SHAP** on the same torch model: run the SHAP cells in `notebooks/deep_learning_model_selection.ipynb`."
 )
+
+st.divider()
+
+# =====================================================
+# SECTION 7 — SHAP EXPLAINABILITY (GRU)
+# =====================================================
+st.header("Model Explainability (SHAP)")
+st.caption(
+    "Kernel SHAP visualizations for the GRU model. Generate/update with "
+    "`cd heat-risk-pk && python -m src.generate_shap`."
+)
+
+_shap_summary = FIG_DIR / "shap_summary_extreme.png"
+_shap_waterfall = FIG_DIR / "shap_waterfall_example.png"
+_shap_table = FIG_DIR / "shap_feature_importance_best_model.csv"
+
+scol1, scol2 = st.columns(2)
+with scol1:
+    safe_image(_shap_summary, "SHAP Summary (Extreme risk class)")
+with scol2:
+    safe_image(_shap_waterfall, "SHAP Waterfall (example city-month)")
+
+if _shap_table.exists():
+    st.markdown("#### SHAP Feature Ranking (Top Rows)")
+    st.dataframe(pd.read_csv(_shap_table).head(20), use_container_width=True)
+else:
+    st.info(
+        "Missing SHAP table `shap_feature_importance_best_model.csv`. "
+        "Run the notebook SHAP cell to create it."
+    )
 
 st.divider()
 
