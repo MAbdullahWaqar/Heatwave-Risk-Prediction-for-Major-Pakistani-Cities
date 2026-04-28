@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 import pydeck as pdk
 from pathlib import Path
-import json
 import plotly.express as px
 
 SEQUENCE_CHECKPOINT_NAME = os.environ.get("SEQUENCE_CHECKPOINT_NAME", "gru_attn_best.pkl")
@@ -77,14 +76,6 @@ def load_forecast(horizon: int, scenario_slug: str) -> pd.DataFrame:
 def load_metrics() -> pd.DataFrame | None:
     path = FIG_DIR / "model_metrics.csv"
     return pd.read_csv(path) if path.exists() else None
-
-@st.cache_data
-def load_model_notes() -> dict | None:
-    path = MODELS_DIR / "metrics.json"
-    if not path.exists():
-        return None
-    with open(path) as f:
-        return json.load(f)
 
 @st.cache_data
 def load_history_if_exists() -> pd.DataFrame | None:
@@ -824,8 +815,6 @@ st.markdown("""
 
 st.subheader("Confusion matrix (GRU, test set)")
 _cm_path = FIG_DIR / "confusion_matrix_sequence.png"
-if not _cm_path.exists():
-    _cm_path = FIG_DIR / "confusion_matrix_lstm.png"
 safe_image(_cm_path, "GRU + Attention — normalized confusion matrix (held-out years)")
 
 st.divider()

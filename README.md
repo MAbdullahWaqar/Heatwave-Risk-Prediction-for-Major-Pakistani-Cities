@@ -12,7 +12,7 @@ The **notebook only reads the files declared in its `Config`** (see [Deep learni
 2. [Problem and task definition](#problem-and-task-definition)  
 3. [Data engineering pipeline (raw → processed)](#data-engineering-pipeline-raw--processed)  
 4. [Heat Stress Index and risk labels](#heat-stress-index-and-risk-labels)  
-5. [Forecast vs monitoring datasets](#forecast-vs-monitoring-datasets)  
+5. [Forecast dataset](#forecast-dataset)  
 6. [Deep learning notebook — data and workflow](#deep-learning-notebook--data-and-workflow)  
 7. [Deep learning model: GRU + attention](#deep-learning-model-gru--attention)  
 8. [Why “bidirectional” appears with the GRU](#why-bidirectional-appears-with-the-gru)  
@@ -40,17 +40,14 @@ Heatwave-Risk-Prediction-for-Major-Pakistani-Cities/
     │   └── app.py                   # Streamlit UI (maps, timelines, scenarios, what-if)
     ├── data/
     │   ├── raw/                     # Source CSVs (see Data sources)
-    │   └── processed/             # df_model_forecast.csv, df_model_monitoring.csv, optional merged weather
+    │   └── processed/             # df_model_forecast.csv, optional merged weather
     ├── models/
     │   ├── gru_attn_best.pkl        # PyTorch **GRU** + attention (export from notebook; `SEQUENCE_CHECKPOINT_NAME`)
-    │   ├── lstm_attn_best.pkl       # Optional alternate checkpoint only if you set SEQUENCE_CHECKPOINT_NAME
     │   ├── feature_cols_forecast.pkl   # Written by train.py (column list for GRU / merges)
-    │   ├── feature_cols_monitoring.pkl # Monitoring feature list (optional analyses)
     │   └── metrics.json             # Written by train.py (pipeline metadata)
     ├── notebooks/
     │   ├── deep_learning_model_selection.ipynb  # **Train + export GRU** → `gru_attn_best.pkl`
-    │   ├── data_processing.ipynb, Pakistani_data.ipynb, …  # Exploratory / ETL helpers
-    │   └── ML_Pipeline_Complete.ipynb, MLProj.ipynb          # Historical ML walkthroughs
+    │   └── data_processing.ipynb    # ETL helper notebook
     ├── outputs/
     │   ├── forecasts/               # forecast_{6–72}m_{baseline|plus1c|plus2c}.csv
     │   └── figures/                 # GRU metrics, saliency, notebook SHAP exports, training curves
@@ -68,10 +65,7 @@ Heatwave-Risk-Prediction-for-Major-Pakistani-Cities/
         ├── evaluate.py              # Entry → GRU eval (`evaluate_lstm`)
         ├── forecast.py              # Projection / HSI helpers; `main()` → GRU forecasts
         ├── forecast_lstm.py         # Recursive GRU scenario forecasts → CSV
-        ├── generate_forecasts.py    # CLI wrapper calling forecast.main()
-        ├── model_zoo.py             # Unused in default pipeline (kept for old notebooks)
-        ├── explain.py               # Stub: use GRU saliency / notebook SHAP
-        └── feature_importance.py    # Stub: use GRU saliency
+        └── generate_forecasts.py    # CLI wrapper calling forecast.main()
 ```
 
 ---
@@ -103,8 +97,8 @@ This section describes how **`data/processed/df_model_forecast.csv`** is **produ
 | 8 | `src/targets.add_heat_index` | Z-scores and **Heat Stress Index** (formula below). |
 | 9 | `src/targets.add_risk_label` | Quantile bins on HSI using `P50`, `P75`, `P90` from `config.py` (0.5, 0.75, 0.9). |
 | 10 | `src/split.add_lags_rollings` | Per city, sorted by time: `heat_lag_{1,3,6}`, `risk_lag_{1,3,6}`, rolling mean/std of heat (windows 3 and 6, shifted to avoid same-month leakage in rolls). |
-| 11 | `src/train.get_feature_sets` | Builds **full** column set and **climate-only** set (drops `risk_lag_*` for forecasting table). |
-| 12 | `src/train.train_models` | Writes `df_model_monitoring.csv`, `df_model_forecast.csv`, sklearn pickles, `metrics.json`. |
+| 11 | `src/train.get_gru_feature_set` | Builds GRU feature list (`risk_lag_*` excluded for forecasting). |
+| 12 | `src/train.save_processed_for_gru` | Writes `df_model_forecast.csv`, `feature_cols_forecast.pkl`, `metrics.json`. |
 
 ---
 
@@ -163,14 +157,11 @@ heat_stress_index =
 
 ---
 
-## Forecast vs monitoring datasets
+## Forecast dataset
 
 | File | Features | Use case |
 |------|----------|----------|
-| `data/processed/df_model_forecast.csv` | Climate / heat / lags of **heat** only — **no `risk_lag_*`** | **Forward forecasting** and **GRU training/eval/forecast** without observing future **risk** classes. |
-| `data/processed/df_model_monitoring.csv` | Same + **`risk_lag_*`** (past observed risk) | **Optional** analyses when label history exists; the default **forecast** path uses the climate-only file below. |
-
-Using `risk_lag_*` to predict the **current** month’s risk is useful for “where are we now?” dashboards with label history, but it is **not** the same problem as projecting **years ahead** where those lags are unknown.
+| `data/processed/df_model_forecast.csv` | Climate / heat / lag/rolling features (no `risk_lag_*`) | **Forward forecasting** and **GRU training/eval/forecast** without future risk-label leakage. |
 
 ---
 
@@ -250,7 +241,7 @@ The **label** in supervised learning is still for the **last month** in each win
 
 **Neural attribution**: **Input × gradient** saliency (`sequence_feature_saliency_top15.png`, `sequence_feature_saliency.csv`) for the **GRU**.
 
-**Kernel SHAP** on the torch model: optional cells in **`notebooks/deep_learning_model_selection.ipynb`** (not `src/explain.py`, which is a stub in the GRU-only pipeline).
+**Kernel SHAP** on the torch model: optional cells in **`notebooks/deep_learning_model_selection.ipynb`**.
 
 ---
 

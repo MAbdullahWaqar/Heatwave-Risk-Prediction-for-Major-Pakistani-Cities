@@ -1,6 +1,0 @@
-model              GRU_Attn
-accuracy           0.902834
-macro_f1           0.886943
-macro_precision    0.889592
-macro_recall       0.887521
-extreme_recall     0.921569

@@ -40,41 +40,27 @@ def build_dataset() -> pd.DataFrame:
     return df
 
 
-def get_feature_sets(df: pd.DataFrame):
-    feature_cols_full = [
+def get_gru_feature_set(df: pd.DataFrame):
+    feature_cols = [
         "tavg_mean", "tmax_mean", "tavg_anom",
         "surface_temp_avg",
         "pop_density", "urban_pct",
         "month_sin", "month_cos",
         "heat_lag_1", "heat_lag_3", "heat_lag_6",
-        "risk_lag_1", "risk_lag_3", "risk_lag_6",
         "heat_roll_mean_3", "heat_roll_std_3",
         "heat_roll_mean_6", "heat_roll_std_6",
     ]
-
-    feature_cols_climate = [c for c in feature_cols_full if not c.startswith("risk_lag_")]
-
-    df_full = df.dropna(subset=feature_cols_full + ["risk_label"]).copy()
-    df_clim = df.dropna(subset=feature_cols_climate + ["risk_label"]).copy()
-
-    return feature_cols_full, feature_cols_climate, df_full, df_clim
+    df_gru = df.dropna(subset=feature_cols + ["risk_label"]).copy()
+    return feature_cols, df_gru
 
 
-def save_processed_for_gru(
-    df_full: pd.DataFrame,
-    df_clim: pd.DataFrame,
-    feature_cols_full: list,
-    feature_cols_climate: list,
-) -> dict:
+def save_processed_for_gru(df_gru: pd.DataFrame, feature_cols: list) -> dict:
     """Write processed tables and feature lists for GRU training (notebook) and forecasting. No sklearn risk models."""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
 
-    joblib.dump(feature_cols_full, MODELS_DIR / "feature_cols_monitoring.pkl")
-    joblib.dump(feature_cols_climate, MODELS_DIR / "feature_cols_forecast.pkl")
-
-    df_full.to_csv(DATA_PROCESSED / "df_model_monitoring.csv", index=False)
-    df_clim.to_csv(DATA_PROCESSED / "df_model_forecast.csv", index=False)
+    joblib.dump(feature_cols, MODELS_DIR / "feature_cols_forecast.pkl")
+    df_gru.to_csv(DATA_PROCESSED / "df_model_forecast.csv", index=False)
 
     metrics = {
         "pipeline": "gru_only",
@@ -89,8 +75,8 @@ def save_processed_for_gru(
 
 def main():
     df = build_dataset()
-    feature_cols_full, feature_cols_climate, df_full, df_clim = get_feature_sets(df)
-    metrics = save_processed_for_gru(df_full, df_clim, feature_cols_full, feature_cols_climate)
+    feature_cols, df_gru = get_gru_feature_set(df)
+    metrics = save_processed_for_gru(df_gru, feature_cols)
     print("Saved processed data + feature lists to:", DATA_PROCESSED, "and", MODELS_DIR)
     print(metrics)
 
