@@ -1,14 +1,7 @@
 {
-  "monitoring_logreg": {
-    "macro_f1": 0.9152894056847545,
-    "accuracy": 0.9290123456790124
-  },
-  "forecast_hgb": {
-    "macro_f1": 0.8000658126809825,
-    "accuracy": 0.8364197530864198
-  },
+  "pipeline": "gru_only",
   "notes": {
-    "monitoring_model": "Uses risk_lag_* features; best for monitoring/alerts",
-    "forecast_model": "Climate-only; best for forward scenario forecasting"
+    "data": "Run python -m src.train to refresh processed CSVs and feature column pickles.",
+    "model": "Train and export GRU via notebooks/deep_learning_model_selection.ipynb -> gru_attn_best.pkl"
   }
 }

@@ -815,10 +815,10 @@ if "forecast_model" in df.columns:
     st.caption(f"Loaded forecast rows: **{df['forecast_model'].iloc[0]}** (`{ck}`).")
 
 st.markdown("""
-**Deployed model (deep learning)**  
+**GRU (sequence model)**  
 - **Architecture:** bidirectional **GRU** + attention pooling + city embedding → softmax over 4 risk classes (`RNNAttentionClassifier` in `src/lstm_risk_model.py`).  
 - **Inputs:** `seq_len` consecutive months of scaled numeric features per city (same schema as `notebooks/deep_learning_model_selection.ipynb`).  
-- **Selection (offline):** validation **macro-F1** with early stopping; **test** metrics in the table above.  
+- **Training:** validation **macro-F1** with early stopping in the notebook; **test** metrics in the table above from `python -m src.evaluate`.  
 - **Artifacts:** **`models/gru_attn_best.pkl`** (via **`SEQUENCE_CHECKPOINT_NAME`**). Forecasts: `python -m src.forecast` (`src/forecast_lstm.py`).
 """)
 
@@ -828,24 +828,10 @@ if not _cm_path.exists():
     _cm_path = FIG_DIR / "confusion_matrix_lstm.png"
 safe_image(_cm_path, "GRU + Attention — normalized confusion matrix (held-out years)")
 
-with st.expander("Optional: tabular sklearn baselines (different feature contract)"):
-    st.markdown(
-        "Logistic regression / HGB were trained on **single-row** `feature_cols_forecast` features. "
-        "They are not the GRU forecaster. Regenerate with `python -m src.evaluate --tabular` → `outputs/figures/tabular_baselines/`."
-    )
-    tdir = FIG_DIR / "tabular_baselines"
-    cm_cols = st.columns(3)
-    for i, img in enumerate(
-        ["confusion_matrix_baseline.png", "confusion_matrix_logreg.png", "confusion_matrix_hgb.png"]
-    ):
-        p = tdir / img
-        with cm_cols[i]:
-            safe_image(p, img)
-
 st.divider()
 
 # =====================================================
-# SECTION 6 — FEATURE IMPORTANCE
+# SECTION 6 — FEATURE IMPORTANCE (GRU)
 # =====================================================
 st.header("Feature contribution (GRU)")
 
@@ -857,32 +843,9 @@ safe_image(
     "Input × gradient saliency on the **GRU** (top features, test subsample — run `python -m src.evaluate` to refresh).",
 )
 
-with st.expander("Legacy tree-model feature rankings (not the GRU)"):
-    c1, c2 = st.columns(2)
-    with c1:
-        safe_image(
-            FIG_DIR / "perm_importance_forecast_hgb_top15.png",
-            "Permutation importance (HGB on tabular forecast features)",
-        )
-    with c2:
-        safe_image(FIG_DIR / "rf_feature_importance_top15.png", "Random Forest feature importance")
-
-st.divider()
-
-# =====================================================
-# SECTION 7 — SHAP EXPLAINABILITY
-# =====================================================
-st.header("Explainability (SHAP — legacy tabular models)")
-
 st.caption(
-    "These plots are from **tree/linear explainers** on single-month tabular models, not from the **GRU**. "
-    "For the GRU, use the **input–gradient saliency** figure above or the DL notebook (Kernel SHAP on the torch model)."
+    "Optional **Kernel SHAP** on the same torch model: run the SHAP cells in `notebooks/deep_learning_model_selection.ipynb`."
 )
-s1, s2 = st.columns(2)
-with s1:
-    safe_image(FIG_DIR / "shap_summary_extreme.png", "Global SHAP summary (legacy tabular)")
-with s2:
-    safe_image(FIG_DIR / "shap_waterfall_example.png", "Local SHAP waterfall (legacy tabular)")
 
 st.divider()
 
