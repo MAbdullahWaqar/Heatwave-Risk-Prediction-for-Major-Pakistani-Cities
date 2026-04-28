@@ -1,175 +1,389 @@
-#  Urban Heat Stress Risk Forecasting — Pakistan (CS-245 Capstone)
-
-End-to-end ML decision-support system to **forecast urban heat stress risk** for major Pakistani cities using **multi-source heterogeneous datasets** and a deployed **Streamlit PoC dashboard**.
-
-##  What this project delivers
-- **Integrated dataset pipeline** (4 sources merged + feature engineering)
-- **ML pipeline** with baseline + multiple classical models + ensemble
-- **Model comparison** (metrics + confusion matrices + classification reports)
 # Urban Heat Stress Risk Forecasting — Pakistan (CS-245 Capstone)
 
-Comprehensive end-to-end project that builds a decision-support system to forecast monthly urban heat stress risk for major Pakistani cities. It includes data ingestion, preprocessing, feature engineering, training, evaluation, explainability, forecast generation for scenarios, and a Streamlit proof-of-concept dashboard.
+This repository implements an end-to-end system to **forecast monthly urban heat stress risk** (four ordinal classes: **Low → Moderate → High → Extreme**) for major Pakistani cities. The **primary sequence model** is a **PyTorch GRU** sequence classifier with **learned attention over time** and **per-city embeddings** (default **`gru_attn_best.pkl`**). The notebook also trains **LSTM** and other variants for comparison; **forecasts and the Streamlit app use the GRU only**.
 
-Repository root highlights
-
-- `heat-risk-pk/` : main project folder
-  - `app/app.py` : Streamlit dashboard
-  - `data/raw/` : original source files (weather, World Bank, surface temp)
-  - `data/processed/` : processed datasets used for modeling
-  - `models/` : trained model artifacts and feature column lists
-  - `outputs/forecasts/` : generated forecast CSVs (used by dashboard)
-  - `outputs/figures/` : evaluation, SHAP and importance plots
-  - `src/` : processing, modeling, evaluation, forecasting scripts
-  - `requirements.txt` : Python dependencies
+The **deep learning notebook only reads the files declared in its `Config`** (see [Deep learning notebook — data and workflow](#deep-learning-notebook--data-and-workflow)); it does **not** load raw weather or World Bank CSVs directly. Those sources are incorporated earlier when **`df_model_forecast.csv`** is built (e.g. via `src/train.py`). Supporting code also provides optional classical models, evaluation scripts, and precomputed forecast CSVs.
 
 ---
 
-## Quick summary — what the project does
+## Table of contents
 
-- Builds a monthly city-level dataset from daily weather and national indicators
-- Computes a Heat Stress Index (HSI) and categorizes risk into 4 classes (Low/Moderate/High/Extreme)
-- Trains models for two operational tasks:
-  - Forecasting (climate-only HistGradientBoosting) — produces multi-month forecasts and scenarios
-  - Monitoring (Logistic Regression) — short-term alerts using recent observed labels (risk_lag_*)
-- Produces explainability artifacts (SHAP, permutation importance)
-- Exposes results in an interactive Streamlit dashboard with maps, timelines, scenario comparison and what-if sliders
-
----
-
-## Data sources (where to look)
-
-- City daily weather: `heat-risk-pk/data/raw/pakistan_city_weather_daily.csv`
-- World Bank population density: `heat-risk-pk/data/raw/API_EN.POP.DNST_DS2_en_csv_v2_110190.csv`
-- World Bank urban population %: `heat-risk-pk/data/raw/API_SP.URB.TOTL.IN.ZS_DS2_en_csv_v2_110318.csv`
-- Average monthly surface temperature: `heat-risk-pk/data/raw/average-monthly-surface-temperature.csv`
-
-Loader functions are in `src/io.py`.
-
----
-
-## How the pipeline works (high level)
-
-1. Raw daily weather is aggregated to monthly city-level features (`src/preprocess.py`).
-2. World Bank and surface temperature sources are converted to year/month form and merged.
-3. Feature engineering adds:
-   - Seasonal encodings (`month_sin`, `month_cos`)
-   - City climatology and anomalies (`tavg_clim`, `tavg_anom`)
-   - Z-scored inputs used by the Heat Stress Index (HSI)
-4. Targets are created:
-   - HSI (weighted z-score combination) in `src/targets.py`
-   - Risk label via percentile bins (P50, P75, P90)
-5. Lag and rolling features (`heat_lag_*`, `risk_lag_*`, rolling means/stds) are produced in `src/split.py`.
-6. Two datasets are prepared:
-   - Climate-only forecast dataset: `data/processed/df_model_forecast.csv` (no `risk_lag_*`)
-   - Monitoring dataset: `data/processed/df_model_monitoring.csv` (includes `risk_lag_*`)
+1. [Repository layout](#repository-layout)  
+2. [Problem and task definition](#problem-and-task-definition)  
+3. [Data engineering pipeline (raw → processed)](#data-engineering-pipeline-raw--processed)  
+4. [Heat Stress Index and risk labels](#heat-stress-index-and-risk-labels)  
+5. [Forecast vs monitoring datasets](#forecast-vs-monitoring-datasets)  
+6. [Deep learning notebook — data and workflow](#deep-learning-notebook--data-and-workflow)  
+7. [Deep learning model: GRU + attention](#deep-learning-model-gru--attention)  
+8. [Why “bidirectional” appears with the GRU](#why-bidirectional-appears-with-the-gru)  
+9. [Sequence construction, training, and checkpoint](#sequence-construction-training-and-checkpoint)  
+10. [Offline evaluation and explainability](#offline-evaluation-and-explainability)  
+11. [Recursive forecasting (`forecast_lstm.py`)](#recursive-forecasting-forecast_lstm)  
+12. [Classical (tabular) models in this repo](#classical-tabular-models-in-this-repo)  
+13. [Tabular vs sequence modeling (comparison)](#tabular-vs-sequence-modeling-comparison)  
+14. [Scripts and modules reference](#scripts-and-modules-reference)  
+15. [Outputs and artifacts](#outputs-and-artifacts)  
+16. [Reproducible run order](#reproducible-run-order)  
+17. [Streamlit dashboard](#streamlit-dashboard)  
+18. [Troubleshooting](#troubleshooting)  
+19. [Limitations and extensions](#limitations-and-extensions)  
+20. [Author](#author)
 
 ---
 
-## Models and their roles
+## Repository layout
 
-- Forecast model (deployed for dashboard): `models/forecast_hgb.pkl`
-  - HistGradientBoosting classifier trained on climate-only features (no `risk_lag_*`).
-  - Used for multi-month projections and scenario comparisons.
-
-- Monitoring model: `models/monitoring_logreg.pkl`
-  - Logistic Regression pipeline (scaler + LR) trained on dataset that includes recent observed `risk_lag_*`.
-  - Intended for short-term monitoring/alerts where recent labels exist.
-
-- Explainability helper: `models/explain_rf.pkl` (Random Forest) used to compute SHAP summaries.
-
-Model definitions and pipelines live in `src/model_zoo.py` and training/evaluation in `src/train.py` and `src/evaluate.py`.
+```
+Heatwave-Risk-Prediction-for-Major-Pakistani-Cities/
+├── requirements.txt                 # Python deps (repo root): torch, sklearn, streamlit, …
+└── heat-risk-pk/
+    ├── app/
+    │   └── app.py                   # Streamlit UI (maps, timelines, scenarios, what-if)
+    ├── data/
+    │   ├── raw/                     # Source CSVs (see Data sources)
+    │   └── processed/             # df_model_forecast.csv, df_model_monitoring.csv, optional merged weather
+    ├── models/
+    │   ├── gru_attn_best.pkl        # Default PyTorch **GRU** + attention (+ metadata in pickle)
+    │   ├── lstm_attn_best.pkl       # Optional LSTM export; use env SEQUENCE_CHECKPOINT_NAME to deploy
+    │   ├── forecast_hgb.pkl         # Optional sklearn HGB (legacy forecast path)
+    │   ├── monitoring_logreg.pkl  # Optional sklearn monitoring
+    │   ├── explain_rf.pkl           # Random Forest for tree-SHAP (optional)
+    │   ├── feature_cols_forecast.pkl
+    │   ├── feature_cols_monitoring.pkl
+    │   └── metrics.json             # Written by train.py (sklearn quick metrics)
+    ├── notebooks/
+    │   ├── deep_learning_model_selection.ipynb  # **Train / compare / export** GRU, LSTM, TCN, Transformer
+    │   ├── data_processing.ipynb, Pakistani_data.ipynb, …  # Exploratory / ETL helpers
+    │   └── ML_Pipeline_Complete.ipynb, MLProj.ipynb          # Historical ML walkthroughs
+    ├── outputs/
+    │   ├── forecasts/               # forecast_{6–72}m_{baseline|plus1c|plus2c}.csv
+    │   └── figures/                 # Metrics, GRU vs LSTM-baseline comparison source, saliency, optional SHAP
+    └── src/
+        ├── config.py                # Paths, splits, GRU `SEQUENCE_CHECKPOINT_NAME`
+        ├── io.py                    # Load raw CSVs
+        ├── preprocess.py            # Daily → monthly, city filtering
+        ├── features.py              # WB long, surface temp PK, month sin/cos, climatology
+        ├── targets.py               # HSI + risk_label
+        ├── split.py                 # Lags, rollings, temporal_split()
+        ├── train.py                 # build_dataset + sklearn training + save processed CSVs
+        ├── merge_dl_features.py     # Humidity, NDVI, merged-weather joins (DL + forecast_lstm)
+        ├── lstm_risk_model.py       # RNNAttentionClassifier, load_lstm_checkpoint
+        ├── evaluate_lstm.py         # Test-set GRU eval + saliency
+        ├── evaluate.py              # Entry: GRU eval; `--tabular` for sklearn baselines
+        ├── forecast.py              # Shared projection/HSI helpers; main() → GRU forecasts
+        ├── forecast_lstm.py         # Recursive GRU scenario forecasts → CSV
+        ├── generate_forecasts.py    # CLI wrapper calling forecast.main()
+        ├── model_zoo.py             # sklearn model dict for optional evaluate --tabular
+        ├── explain.py               # Tree SHAP on explain_rf (optional)
+        └── feature_importance.py    # Optional tabular importance utilities
+```
 
 ---
 
-## Evaluation (key metrics)
+## Problem and task definition
 
-- Evaluation artifacts and confusion matrices are saved to `outputs/figures/`.
-- Example metrics (found at `outputs/figures/model_metrics.csv`):
-  - HGB (forecast): macro-F1 ≈ 0.90, accuracy ≈ 0.92
-  - Logistic Regression (monitoring): macro-F1 ≈ 0.91, accuracy ≈ 0.92 (benefits from `risk_lag_*`)
+- **Geography**: Major Pakistani cities (coverage determined by raw weather data and `preprocess.filter_cities`).
+- **Time grain**: **Month** (year, month index).
+- **Target**: `risk_label` ∈ {0,1,2,3} derived from the **Heat Stress Index** (see below).
+- **Operational goal**: Given **recent and current climate-related inputs**, estimate **probability over the four risk classes** for the **current** month in a forecasting setting, and **roll forward** under **warming / urbanization / population** scenarios for planning dashboards.
 
-Notes: LR performs well on monitoring because it leverages recent labels (`risk_lag_*`) — this is valid for alerting but would be label leakage for forward forecasting. HGB is the correct choice for forecasting because it does not require future labels.
+The **GRU** answers: *“Given the last `seq_len` months of features for this city, what is the risk distribution for the month at the end of that window?”* During **forecast simulation**, synthetic future months are appended so the window always ends on the month being projected.
 
 ---
 
-## Reproducible run order (recommended)
+## Data engineering pipeline (raw → processed)
 
-1) Create environment and install dependencies
+This section describes how **`data/processed/df_model_forecast.csv`** is **produced** (e.g. `python -m src.train`). The **deep learning notebook does not open these raw inputs**; it only consumes the processed paths listed in [Deep learning notebook — data and workflow](#deep-learning-notebook--data-and-workflow).
 
-```bash
-python -m venv .venv
-source .venv/bin/activate   # mac / linux
-# .venv\Scripts\activate   # windows
-pip install -r heat-risk-pk/requirements.txt
+| Step | Implementation | Description |
+|------|----------------|-------------|
+| 1 | `src/io.py` | Reads `pakistan_city_weather_daily.csv`, World Bank population density and urban % CSVs (skiprows=4), and `average-monthly-surface-temperature.csv` (PAK monthly surface temp). |
+| 2 | `src/preprocess.daily_to_monthly` | Aggregates daily station weather to **city–year–month** means/sums (tavg, tmax, tmin, prcp, wspd, pres, tsun, n_days). |
+| 3 | `src/preprocess.filter_cities` | Keeps cities with **≥ `MIN_MONTHS_PER_CITY` (600)** months and **≥ 80%** non-null `tavg_mean` (`src/config.py`). |
+| 4 | `src/features.wb_to_long` | Melts World Bank wide tables to `(year, pop_density)` and `(year, urban_pct)` for **PAK**. |
+| 5 | `src/features.surface_pk_monthly` | Extracts Pakistan surface temperature by year/month. |
+| 6 | `src/features.add_time_features` | `month_sin`, `month_cos` (cyclical month encoding). |
+| 7 | `src/features.add_city_climatology` | Per **(city, month)** mean `tavg_mean` → `tavg_clim`; anomaly `tavg_anom = tavg_mean - tavg_clim`. |
+| 8 | `src/targets.add_heat_index` | Z-scores and **Heat Stress Index** (formula below). |
+| 9 | `src/targets.add_risk_label` | Quantile bins on HSI using `P50`, `P75`, `P90` from `config.py` (0.5, 0.75, 0.9). |
+| 10 | `src/split.add_lags_rollings` | Per city, sorted by time: `heat_lag_{1,3,6}`, `risk_lag_{1,3,6}`, rolling mean/std of heat (windows 3 and 6, shifted to avoid same-month leakage in rolls). |
+| 11 | `src/train.get_feature_sets` | Builds **full** column set and **climate-only** set (drops `risk_lag_*` for forecasting table). |
+| 12 | `src/train.train_models` | Writes `df_model_monitoring.csv`, `df_model_forecast.csv`, sklearn pickles, `metrics.json`. |
+
+---
+
+## Deep learning notebook — data and workflow
+
+Everything below matches **`heat-risk-pk/notebooks/deep_learning_model_selection.ipynb`**: that notebook **only** loads and merges the datasets defined in its **`Config`** dataclass. No other files are read inside the notebook for training or model comparison.
+
+### Data files used by the notebook (and only these)
+
+Paths are relative to the notebook folder (`heat-risk-pk/notebooks/`). In code they appear as `../data/...`.
+
+| `Config` field | Path (from repo: `heat-risk-pk/…`) | Role |
+|----------------|-------------------------------------|------|
+| `data_path` | `data/processed/df_model_forecast.csv` | **Required.** Base monthly table: engineered features, `risk_label`, `city`, and either `date` or `year`/`month`. All GRU / LSTM / TCN / Transformer models consume **numeric columns derived from this table** (after merges). |
+| `humidity_path` | `data/raw/pakistan_humidity_daily.csv` | **Optional.** If the file exists (`os.path.exists`), daily rows are aggregated to city–year–month means; columns such as `rh_avg`, `rh_max`, `rh_min`, `prcp`, `et0` (when present) are prefixed with `hum_` and left-joined. If missing, this step is skipped. |
+| `ndvi_path` | `data/raw/pakistan_ndvi_monthly.csv` | **Optional.** If the file exists, NDVI is averaged to city–year–month as `ndvi_monthly` and left-joined. If missing, skipped. |
+| `merged_weather_scaled_path` | `data/processed/pakistan_weather_merged_scaled.csv` | **Optional.** If the file exists and has `time` + `city`, selected columns are aggregated to monthly `wm_*` features and left-joined. If missing, skipped. |
+
+After merges, the notebook builds **`feature_cols`** as all **numeric** columns except metadata, target, `year`/`month`, and **`risk_lag_*`** (explicitly excluded to avoid label leakage in forecasting-style learning).
+
+**Where the base CSV comes from:** `df_model_forecast.csv` is **not** created inside this notebook. It is expected to **already exist** (typically produced by `src/train.py`, which merges weather, World Bank, surface temperature, etc., into the monthly pipeline described [above](#data-engineering-pipeline-raw--processed)). The notebook **treats that file as the single mandatory input table** and only adds the three optional joins above.
+
+**Inference parity:** `src/merge_dl_features.py` replicates the same three optional merges so `forecast_lstm.py` and `evaluate_lstm.py` see the same column set as training.
+
+### What the notebook does (model preparation and selection)
+
+1. **Load** `df_model_forecast.csv` and construct `date` from `year`/`month` if needed.  
+2. **Conditionally merge** humidity, NDVI, and merged-weather files when paths exist on disk.  
+3. **Define features** (numeric, non-leakage columns) and **splits** by year: train ≤ 2015, val 2016–2019, test ≥ 2020 (same years as `Config.train_end_year` / `val_end_year`).  
+4. **Impute** missing values with **training-set medians**; **fit `StandardScaler` on training rows only**, apply to all splits.  
+5. **Build sequences** per city: sliding windows of length **`seq_len`** (default 12), target = `risk_label` at the end of the window.  
+6. **Train and compare** multiple architectures with the **same** supervised setup: **GRU + Attention**, **LSTM + Attention**, **TCN**, **Transformer** encoder (see notebook markdown for the list).  
+7. **Select** the best model by **validation macro-F1** (with early stopping, class-weighted loss, AdamW, scheduler, gradient clipping — hyperparameters in `Config`).  
+8. **Export** the chosen checkpoint (default deploy: **`models/gru_attn_best.pkl`** when GRU wins validation macro-F1; override with env **`SEQUENCE_CHECKPOINT_NAME`**), including `model_state_dict`, `feature_cols`, `city_to_idx`, `config`, and `model_name`.
+
+So: the notebook’s **declared data scope** is exactly the **one required processed CSV** plus **up to three optional files** named in `Config`. All other “sources” (daily weather, World Bank, …) are only relevant **upstream**, when building `df_model_forecast.csv`.
+
+---
+
+## Heat Stress Index and risk labels
+
+**Z-scores** in `add_heat_index` use each column’s **mean and standard deviation over the dataframe passed into that function** at that step (column-wise, not per-city). Then:
+
+```
+heat_stress_index =
+    0.40 * tavg_z
+  + 0.30 * tmax_z
+  + 0.15 * surf_z
+  + 0.10 * pop_z
+  + 0.10 * urb_z
+  - 0.05 * wind_z
 ```
 
-2) Build processed datasets and model-ready tables
+(`src/targets.py` — `wspd_mean` filled with median before `wind_z`.)
+
+**Risk labels** (ordinal 0…3): compare HSI to **global** quantiles of HSI on the dataframe at binning time — `P50`, `P75`, `P90` (defaults 50th, 75th, 90th percentiles): Low / Moderate / High / Extreme.
+
+---
+
+## Forecast vs monitoring datasets
+
+| File | Features | Use case |
+|------|----------|----------|
+| `data/processed/df_model_forecast.csv` | Climate / heat / lags of **heat** only — **no `risk_lag_*`** | **Forward forecasting** and **GRU (and notebook baselines) training/eval/forecast** without observing future **risk** classes. |
+| `data/processed/df_model_monitoring.csv` | Same + **`risk_lag_*`** (past observed risk) | **Operational monitoring** when recent labels exist; sklearn `monitoring_logreg.pkl` is trained here. |
+
+Using `risk_lag_*` to predict the **current** month’s risk is useful for “where are we now?” dashboards with label history, but it is **not** the same problem as projecting **years ahead** where those lags are unknown.
+
+---
+
+## Deep learning model: GRU + attention
+
+The production default is **`heat-risk-pk/models/gru_attn_best.pkl`**, produced after **training candidate architectures in `notebooks/deep_learning_model_selection.ipynb` and selecting the best run** (here **GRU + Attention**) by validation **macro-F1**. The **`RNNAttentionClassifier`** lives in **`src/lstm_risk_model.py`** and is used by `evaluate_lstm.py` and `forecast_lstm.py`.
+
+### High-level architecture
+
+1. **Input**: batch of shape **(N, T, F)** where **T = `seq_len`** (default **12** months), **F = len(feature_cols)** per checkpoint. A parallel tensor **city_idx** (N,) indexes the city embedding table.
+
+2. **Recurrent core:** **`torch.nn.GRU`** with **`bidirectional=True`** — hidden states at **every** time step.
+
+3. **Attention pooling**: `AttentionPool` scores each time step → **softmax over time** → **weighted sum** of GRU outputs → one **context vector** per sample.
+
+4. **City conditioning**: `nn.Embedding(num_cities, embed_dim)` (default **embed_dim = 8**); concatenated with the context vector.
+
+5. **Classifier head**: `Linear → ReLU → Dropout → Linear` → **4 logits** → **softmax** for class probabilities. Training uses **cross-entropy** (with optional class weights in the notebook).
+
+### Implementation constants (defaults in code / notebook)
+
+| Component | Typical value | Where defined |
+|-----------|----------------|---------------|
+| RNN type | **GRU** (`nn.GRU`) | `gru_attn_best.pkl`; notebook `GRU_Attn` |
+| `bidirectional` | **True** | `lstm_risk_model.py` |
+| `hidden_dim` | **64** | Notebook `Config`; checkpoint `config` |
+| `num_layers` | **2** | Same |
+| `dropout` | **0.25** | GRU inter-layer + MLP head |
+| `seq_len` | **12** | Notebook `Config`; `forecast_lstm` / `evaluate_lstm` read from checkpoint |
+| `embed_dim` | **8** | City embedding |
+| Optimizer | **AdamW**, lr **3e-4**, weight decay **1e-4** | Notebook `Config` |
+| Max epochs | **80** | Notebook |
+| Early stopping patience | **12** | Notebook |
+| LR scheduler | **ReduceLROnPlateau** (maximize val score, factor 0.5, patience 4) | Notebook |
+| Gradient clipping | **max_norm 1.0** | Notebook `max_grad_norm` |
+| Batch size | **32** | Notebook |
+
+The notebook also trains **LSTM**, **TCN**, and **Transformer** for comparison; production **`model_name`** on forecasts is **`GRU_Attn`** (from the GRU checkpoint).
+
+---
+
+## Why “bidirectional” appears with the GRU
+
+The **`nn.GRU`** is constructed with **`bidirectional=True`**: two independent chains over the **fixed length-T context window**, **concatenated** per step so attention and the MLP use dimension **2 × hidden_dim**.
+
+In **`src/lstm_risk_model.py`**, the GRU uses the same bidirectional pattern as in the notebook. **Bidirectional** here means forward and backward over **months inside the window**, not future **labels** — the label is always for the **last** month of the window.
+
+The **label** in supervised learning is still for the **last month** in each window (the sequence ends at the prediction month). Bidirectionality does **not** use future **labels**; it only uses future **months inside the feature window** relative to earlier steps in that same window (standard for **encoding** a finite context segment).
+
+---
+
+## Sequence construction, training, and checkpoint
+
+**Per city**, rows are sorted by date. For each index `t` from `seq_len-1` to `len-1`, one training sample is:
+
+- `X`: features for months `[t-seq_len+1, …, t]` → shape `(seq_len, F)`
+- `y`: `risk_label` at month `t`
+- `city_idx`: city id at month `t`
+
+**Splits** (notebook and `evaluate_lstm.py`): by **calendar year** — train ≤ `TRAIN_END_YEAR` (**2015**), validation **2016–2019** (`VAL_END_YEAR`), test **≥ 2020** (`src/config.py`).
+
+**Preprocessing (leakage-safe)**:
+
+- Numeric coercion, inf → NaN.
+- **Median imputation** using **training rows only** for each feature column.
+- **`StandardScaler`** fit on **training rows only**, applied to all data and reused in `forecast_lstm.py` on history + simulated futures.
+
+**Checkpoint contents** (typical): `model_state_dict`, `config` (hyperparameters), `feature_cols` (ordered list), `city_to_idx` (string → int), `model_name` (e.g. **`GRU_Attn`** for the default GRU weights file).
+
+---
+
+## Offline evaluation and explainability
+
+- **Command**: `cd heat-risk-pk && python -m src.evaluate` → runs **`src/evaluate_lstm.py`**.
+
+**Metrics** (sklearn on test sequences): accuracy, macro precision/recall/F1, **Extreme-class recall**, confusion matrix, classification report. Rows include **majority-class baseline** and **GRU** (`model_metrics.csv`).
+
+**Neural attribution**: **Input × gradient** saliency averaged over batch and time (`sequence_feature_saliency_top15.png`, `sequence_feature_saliency.csv`) for the **GRU**.
+
+**Optional**: `python -m src.evaluate --tabular` writes sklearn baselines under `outputs/figures/tabular_baselines/` (logreg, HGB, etc. on **flat** `feature_cols_forecast` — different contract than sequences).
+
+**Optional**: `python -m src.explain` builds **TreeExplainer** SHAP plots from **`explain_rf.pkl`** (Random Forest on tabular forecast features) — useful for **interpretability of tree models**, not a substitute for GRU introspection.
+
+The **notebook** contains additional **Kernel SHAP** experimentation on a wrapper around the torch model for deeper DL explainability if you extend the project.
+
+---
+
+## Recursive forecasting (`forecast_lstm.py`)
+
+- Loads **`models/<SEQUENCE_CHECKPOINT_NAME>`** (default **`gru_attn_best.pkl`**), `merge_auxiliary_features`, rebuilds scaler on train years, builds **projection lookups** (`build_projection_lookups` in `forecast.py`) for climatology and urban/pop trends.
+- For each city, initializes a **sequence buffer** from the tail of **observed** merged history.
+- For each future month in the horizon: applies **scenario** adjustments (temperature delta, urban delta, population multiplier), updates **synthetic** climate fields and **heat stress index**, builds one new feature row, slides the window, runs **GRU → softmax**, appends CSV row with `pred_risk`, `p_low`…`p_extreme`.
+
+**Outputs**: `outputs/forecasts/forecast_{6,12,24,36,48,60,72}m_{baseline,plus1c,plus2c}.csv` (exact set defined in `run_lstm_main`).
+
+**Entry points**: `python -m src.forecast` (GRU from `config.py`), or `python src/generate_forecasts.py` from `heat-risk-pk/`. **Legacy**: `FORECAST_USE_HGB=1 python -m src.forecast` uses sklearn HGB + `forecast_hgb.pkl`.
+
+---
+
+## Classical (tabular) models in this repo
+
+| Artifact | Trainer | Role |
+|----------|---------|------|
+| `monitoring_logreg.pkl` | `src/train.py` | Pipeline: StandardScaler + balanced **LogisticRegression** on **monitoring** features (includes `risk_lag_*`). |
+| `forecast_hgb.pkl` | `src/train.py` | **HistGradientBoostingClassifier** on **climate-only** features — legacy forecaster; optional via env var. |
+| `explain_rf.pkl` | `src/train.py` | **RandomForest** for SHAP / feature plots. |
+| `model_zoo.get_models()` | `src/evaluate.py --tabular` | LogReg, DecisionTree, RF, HGB for extra baseline tables/figures. |
+
+These do **not** replace the **GRU** in the default forecast or dashboard data path.
+
+---
+
+## Tabular vs sequence modeling (comparison)
+
+| Aspect | Classical tabular | GRU sequence (this project) |
+|--------|-------------------|------------------------------|
+| Input shape | One vector per (city, month) | **(seq_len × n_features)** tensor + **city id** |
+| Time | Explicit **lags/rolls** only | GRU **state** + optional same lags in **F**; **attention** learns time weights |
+| Nonlinearity | Trees / piecewise or linear | **GRU** + MLP head |
+| Forecast default | HGB if `FORECAST_USE_HGB=1` | **`gru_attn_best.pkl`** (via `SEQUENCE_CHECKPOINT_NAME`) in `forecast_lstm.py` |
+| Monitoring | LogReg with `risk_lag_*` | Not used in GRU forecast features |
+
+---
+
+## Scripts and modules reference
+
+| Path | Role |
+|------|------|
+| `src/train.py` | `build_dataset()` → processed CSVs + sklearn pickles + `metrics.json`. |
+| `notebooks/deep_learning_model_selection.ipynb` | Train/compare DL models; **export** winning checkpoint (e.g. `gru_attn_best.pkl`). |
+| `src/merge_dl_features.py` | Join humidity, NDVI, optional merged weather onto a city–month dataframe. |
+| `src/lstm_risk_model.py` | **`RNNAttentionClassifier`**: **GRU** + attention + head; `load_lstm_checkpoint` (also loads LSTM weights for baseline eval). |
+| `src/evaluate_lstm.py` | GRU test evaluation + saliency. |
+| `src/evaluate.py` | `main()` → GRU eval; `--tabular` → sklearn baselines to subfolder. |
+| `src/forecast_lstm.py` | `run_lstm_main`, `forecast_city_lstm` — GRU scenario CSV generation. |
+| `src/forecast.py` | `compute_heat_index`, `build_projection_lookups`, `next_year_month`; `main()` → GRU forecaster. |
+| `src/generate_forecasts.py` | Invokes `forecast.main()` with path fix for script execution. |
+| `app/app.py` | Streamlit application. |
+
+---
+
+## Outputs and artifacts
+
+| Location | Contents |
+|----------|----------|
+| `outputs/forecasts/*.csv` | Precomputed **GRU** forecasts; columns include `forecast_model`, `forecast_checkpoint`, scenario knobs, probabilities. |
+| `outputs/figures/model_metrics.csv` | After `python -m src.evaluate`: GRU vs majority baseline. |
+| `outputs/figures/confusion_matrix_sequence.png` | **GRU** test confusion matrix. |
+| `outputs/figures/sequence_feature_saliency*.png,.csv` | Gradient-based importance for **GRU** inputs. |
+| `outputs/figures/shap_*.png` | From `explain.py` (Random Forest), optional. |
+
+---
+
+## Reproducible run order
 
 ```bash
-python heat-risk-pk/src/train.py --build-only
-```
+# 1) Environment (from repo root)
+python -m venv .venv && source .venv/activate
+pip install -r requirements.txt
 
-Note: `src/train.py` includes `build_dataset()` which loads raw data via `src/io.py`, aggregates and merges sources, applies feature engineering and creates `data/processed/df_model_forecast.csv` and `df_model_monitoring.csv`.
+# 2) Build processed tables + sklearn side artifacts
+cd heat-risk-pk && python -m src.train
 
-3) Train models and save artifacts
+# 3) Jupyter: heat-risk-pk/notebooks/deep_learning_model_selection.ipynb
+#    Data in notebook = ONLY Config paths (df_model_forecast.csv + optional 3 files).
+#    Train GRU / LSTM / TCN / Transformer; pick best by val macro-F1; save e.g. models/gru_attn_best.pkl
 
-```bash
-python heat-risk-pk/src/train.py
-```
+# 4) Evaluate GRU checkpoint on held-out years
+cd heat-risk-pk && python -m src.evaluate
 
-This trains monitoring and forecast models, saves `models/monitoring_logreg.pkl`, `models/forecast_hgb.pkl`, and writes `models/feature_cols_*.pkl`. It also saves processed CSVs to `data/processed/`.
+# 5) Generate forecast CSVs (GRU)
+cd heat-risk-pk && python -m src.forecast
+# or:  cd heat-risk-pk && python src/generate_forecasts.py
 
-4) Evaluate & produce figures (confusion matrices, metrics)
+# 6) Optional: tabular baselines, SHAP
+cd heat-risk-pk && python -m src.evaluate --tabular
+cd heat-risk-pk && python -m src.explain
 
-```bash
-python heat-risk-pk/src/evaluate.py
-```
-
-5) Generate forecasts (scenarios & horizons)
-
-```bash
-python heat-risk-pk/src/forecast.py
-```
-
-This creates forecast CSVs in `outputs/forecasts/` used by the Streamlit dashboard.
-
-6) (Optional) Explainability & SHAP plots
-
-```bash
-python heat-risk-pk/src/explain.py
-```
-
-7) Run the dashboard
-
-```bash
+# 7) Dashboard (from repo root)
 streamlit run heat-risk-pk/app/app.py
 ```
 
-Open the displayed URL in your browser (usually `http://localhost:8501`).
-
 ---
 
-## Dashboard notes
+## Streamlit dashboard
 
-- The dashboard reads forecast CSVs from `outputs/forecasts/` and figures from `outputs/figures/`.
-- It shows city maps, timelines, scenario comparisons (+1°C, +2°C), and live what-if adjustments (re-scoring; not retraining).
-- Long-horizon forecasts (≥12 months) are generated recursively and will stabilize into repeating seasonal cycles — see `src/forecast.py` and `Explanations/WHY_FORECASTS_REPEAT.md` for details.
+- Reads **`outputs/forecasts/`** and **`outputs/figures/`**.
+- **Map**, **city timelines**, **scenario comparison** (baseline / +1°C / +2°C style files), **what-if** (**Predict Now** then sliders — heuristic rescoring of saved GRU probabilities, not online learning).
+- Displays **GRU** metrics and confusion matrix when present; may show **legacy** tree/linear SHAP as labeled in the app.
 
 ---
 
 ## Troubleshooting
 
-- Missing forecast files: run `python heat-risk-pk/src/forecast.py` to regenerate and verify `outputs/forecasts/`.
-- Missing trained model `.pkl`: run `python heat-risk-pk/src/train.py`.
-- Data memory/performance: consider running preprocessing on a machine with sufficient RAM; reduce sample size for a quick demo.
+| Issue | Action |
+|-------|--------|
+| Missing forecasts | `cd heat-risk-pk && python src/generate_forecasts.py` |
+| `No module named 'src'` | Run commands with **`cd heat-risk-pk`** first, or `python -m src.<module>`. |
+| Missing checkpoint | Complete notebook training and place the chosen weights under `heat-risk-pk/models/` (default **`gru_attn_best.pkl`**; set **`SEQUENCE_CHECKPOINT_NAME`** if using another filename). |
+| Empty sequences in eval | Ensure processed CSV spans years beyond `VAL_END_YEAR` and cities have ≥ `seq_len` test months. |
 
 ---
 
-## Limitations & next steps
+## Limitations and extensions
 
-- Long-horizon forecasts stabilize into seasonal cycles due to recursive lags and static climatology.
-- Surface temperature is national-level; city-scale climate projections would improve realism.
-- Future work: integrate CMIP6 projections, add explicit year/time-trend features, test LightGBM/XGBoost ensembles, calibrate classes against health outcomes.
+- **Recursive** scenario forecasts with **climatology-style** inputs tend to **repeat seasonal patterns** at long horizons; interpret as **month-of-year risk** and **relative scenarios**, not precise far-future year ordering.
+- Risk classes are **percentile-based** on historical HSI, not health-outcome calibrated thresholds.
+- Extensions: CMIP6 forcings, explicit **year** or trend features, probabilistic calibration, larger architectures or ensembles.
 
 ---
 
@@ -177,9 +391,4 @@ Open the displayed URL in your browser (usually `http://localhost:8501`).
 
 - Muhammad Abdullah Waqar
 
-
----
-
-For a detailed project report (with formulas, code references, and appendix), see `heat-risk-pk/ML_Project_Final_Report.pdf`
-
-
+Supplementary PDF (if included in your copy): `heat-risk-pk/ML_Project_Final_Report.pdf`.

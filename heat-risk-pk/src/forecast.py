@@ -135,6 +135,14 @@ def forecast_city(city, model, feature_cols, df_hist, proj_lookup, surf_proj, m_
 
 
 def main():
+    """Generate forecasts with the GRU + Attention checkpoint (see `SEQUENCE_CHECKPOINT_NAME` in `config.py`)."""
+    from .forecast_lstm import run_lstm_main
+
+    run_lstm_main()
+
+
+def main_hgb():
+    """Legacy: HistGradientBoosting + `forecast_hgb.pkl` (set FORECAST_USE_HGB=1 to use from wrapper)."""
     FORECAST_DIR.mkdir(parents=True, exist_ok=True)
 
     # Use FORECAST dataset (climate-only) for projections/history
@@ -162,6 +170,8 @@ def main():
         for c in cities:
             frames.append(forecast_city(c, model, feature_cols, df_hist, proj_lookup, surf_proj, m_pop, m_urb, stats, horizon_months=h, scenario=scenario))
         out = pd.concat(frames, ignore_index=True)
+        out.insert(0, "forecast_model", "HGB")
+        out.insert(1, "forecast_checkpoint", "forecast_hgb.pkl")
         out.to_csv(FORECAST_DIR / f"forecast_{h}m_{name}.csv", index=False)
 
     # Original short-term forecasts
@@ -200,4 +210,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import os
+
+    if os.environ.get("FORECAST_USE_HGB", "").lower() in ("1", "true", "yes"):
+        main_hgb()
+    else:
+        main()

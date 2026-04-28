@@ -1,6 +1,6 @@
-model                logreg
-accuracy            0.92284
-macro_f1           0.907482
-macro_precision    0.906728
-macro_recall       0.910368
-extreme_recall     0.957746
+model              GRU_Attn
+accuracy           0.902834
+macro_f1           0.886943
+macro_precision    0.889592
+macro_recall       0.887521
+extreme_recall     0.921569

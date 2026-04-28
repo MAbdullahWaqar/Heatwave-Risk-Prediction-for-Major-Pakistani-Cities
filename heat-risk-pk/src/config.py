@@ -1,6 +1,11 @@
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# Deployed PyTorch **GRU** + attention checkpoint (default `gru_attn_best.pkl`).
+# Override only for experiments: export SEQUENCE_CHECKPOINT_NAME=...
+SEQUENCE_CHECKPOINT_NAME = os.environ.get("SEQUENCE_CHECKPOINT_NAME", "gru_attn_best.pkl")
 
 DATA_RAW = PROJECT_ROOT / "data" / "raw"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"

@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -5,6 +6,8 @@ import pydeck as pdk
 from pathlib import Path
 import json
 import plotly.express as px
+
+SEQUENCE_CHECKPOINT_NAME = os.environ.get("SEQUENCE_CHECKPOINT_NAME", "gru_attn_best.pkl")
 
 # =====================================================
 # Page config
@@ -64,7 +67,9 @@ def load_forecast(horizon: int, scenario_slug: str) -> pd.DataFrame:
             f"- forecast_6m_plus2c.csv\n"
             f"- forecast_72m_plus1c.csv\n"
             f"- forecast_72m_plus2c.csv\n\n"
-            f"Run: python generate_forecasts.py"
+            f"From the `heat-risk-pk` folder run:\n"
+            f"  python -m src.forecast\n"
+            f"(uses **GRU** weights `models/{SEQUENCE_CHECKPOINT_NAME}`; see `src/config.py` / `src/forecast_lstm.py`.)"
         )
     return pd.read_csv(path)
 
@@ -88,6 +93,15 @@ def load_history_if_exists() -> pd.DataFrame | None:
 
 def expected_risk_from_probs(df: pd.DataFrame, p_low, p_mod, p_high, p_extreme) -> pd.Series:
     return 0*p_low + 1*p_mod + 2*p_high + 3*p_extreme
+
+
+def expected_risk_to_rgb(avg: float) -> tuple[int, int, int]:
+    """Continuous 0–3 expected risk → RGB (cool/green → yellow → hot/red). Used on map so what-if shifts show even when argmax class stays Extreme."""
+    t = float(np.clip(float(avg) / 3.0, 0.0, 1.0))
+    r = int(35 + 215 * (t**1.05))
+    g = int(195 * ((1.0 - t) ** 1.1))
+    b = int(28 + 35 * t)
+    return (min(r, 255), min(max(g, 0), 255), min(b, 255))
 
 def extend_forecast_to_year(df_in: pd.DataFrame, target_end_year: int = 2030) -> pd.DataFrame:
     """
@@ -173,26 +187,48 @@ def extend_forecast_to_year(df_in: pd.DataFrame, target_end_year: int = 2030) ->
     df_ext["date"] = pd.to_datetime(df_ext["year"].astype(str) + "-" + df_ext["month"].astype(str).str.zfill(2) + "-01")
     return df_ext
 
+def _ensure_prob_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce GRU forecast class probabilities to finite floats and renormalize per row."""
+    out = df.copy()
+    for c in ("p_low", "p_mod", "p_high", "p_extreme"):
+        if c not in out.columns:
+            raise ValueError(f"Forecast CSV missing required column `{c}` for what-if (GRU softmax outputs).")
+        out[c] = pd.to_numeric(out[c], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    s = out["p_low"] + out["p_mod"] + out["p_high"] + out["p_extreme"]
+    s = np.maximum(np.asarray(s, dtype=np.float64), 1e-12)
+    for c in ("p_low", "p_mod", "p_high", "p_extreme"):
+        out[c] = out[c] / s
+    return out
+
+
 def apply_whatif_rescore(df: pd.DataFrame, temp_delta: float, urban_delta: float, pop_mult: float) -> pd.DataFrame:
     """
-    Instant what-if sensitivity layer.
-    Adjusts probabilities and re-normalizes to give interactive scenario response.
+    Instant what-if sensitivity layer on top of **GRU** forecast class probabilities (`p_*`).
+    Heuristic only — does not re-run the torch model. Stronger than before so sliders move
+    `expected_risk` and often `pred_risk`, not just tiny softmax nudges.
     """
-    df2 = df.copy()
+    df2 = _ensure_prob_columns(df)
 
-    # sensitivity score (tunable)
-    score = (0.35 * temp_delta) + (0.08 * urban_delta) + (0.60 * (pop_mult - 1.0))
-    bump = 1 / (1 + np.exp(-score))  # 0..1
-
-    # shift extreme prob slightly, then take mass from low/mod/high
-    df2["p_extreme_adj"] = np.clip(df2["p_extreme"] + 0.35 * (bump - 0.5), 0, 1)
+    # ~(-0.95, 0.95): warmer sliders → positive stress → more mass on high/extreme
+    stress = float(
+        np.tanh(
+            0.58
+            * (
+                0.52 * float(temp_delta)
+                + 0.07 * float(urban_delta)
+                + 0.92 * (float(pop_mult) - 1.0)
+            )
+        )
+    )
+    df2["p_extreme_adj"] = np.clip(df2["p_extreme"] + 0.52 * stress, 0.0, 1.0)
     take = df2["p_extreme_adj"] - df2["p_extreme"]
 
-    df2["p_low_adj"] = np.clip(df2["p_low"] - 0.70 * take, 0, 1)
-    df2["p_mod_adj"] = np.clip(df2["p_mod"] - 0.20 * take, 0, 1)
-    df2["p_high_adj"] = np.clip(df2["p_high"] - 0.10 * take, 0, 1)
+    df2["p_low_adj"] = np.clip(df2["p_low"] - 0.82 * take, 0.0, 1.0)
+    df2["p_mod_adj"] = np.clip(df2["p_mod"] - 0.12 * take, 0.0, 1.0)
+    df2["p_high_adj"] = np.clip(df2["p_high"] - 0.06 * take, 0.0, 1.0)
 
     s = df2["p_low_adj"] + df2["p_mod_adj"] + df2["p_high_adj"] + df2["p_extreme_adj"]
+    s = np.maximum(np.asarray(s, dtype=np.float64), 1e-12)
     for c in ["p_low_adj", "p_mod_adj", "p_high_adj", "p_extreme_adj"]:
         df2[c] = df2[c] / s
 
@@ -206,6 +242,7 @@ def safe_image(path: Path, caption: str):
         st.image(str(path), caption=caption, use_container_width=True)
     else:
         st.info(f"Missing figure: {path.name}")
+
 
 # =====================================================
 # Sidebar controls
@@ -233,22 +270,44 @@ compare_cities = st.sidebar.multiselect(
     default=["Karachi", "Lahore", "Multan"]
 )
 
-st.sidebar.subheader("What-if Simulation (Instant)")
-temp_delta = st.sidebar.slider("Temperature delta (°C)", -1.0, 4.0, 0.0, 0.5)
-urban_delta = st.sidebar.slider("Urbanization delta (pp)", -5.0, 10.0, 0.0, 0.5)
-pop_mult = st.sidebar.slider("Population multiplier", 0.8, 1.5, 1.0, 0.05)
+st.sidebar.subheader("What-if on GRU outputs (instant)")
+st.sidebar.caption(
+    "Rescores **saved** GRU class probabilities. Click **Predict Now**, move sliders (try **+2 °C** or **+1.1× pop**), "
+    "then watch **map colour** (expected risk 0–3) and charts. **Reset** turns what-if off."
+)
 
-# persistent what-if toggle
 if "use_whatif" not in st.session_state:
     st.session_state["use_whatif"] = False
 
-predict_now = st.sidebar.button("Predict Now", type="primary")
+# Reset must run *before* sliders: widget keys cannot be assigned after the widget is created.
 reset_whatif = st.sidebar.button("↩ Reset What-if")
-
-if predict_now:
-    st.session_state["use_whatif"] = True
 if reset_whatif:
     st.session_state["use_whatif"] = False
+    for _wk in ("whatif_temp_delta", "whatif_urban_delta", "whatif_pop_mult"):
+        st.session_state.pop(_wk, None)
+    st.rerun()
+
+temp_delta = st.sidebar.slider(
+    "Temperature delta (°C)",
+    -1.0,
+    4.0,
+    0.0,
+    0.5,
+    key="whatif_temp_delta",
+    help="Heuristic stress tilt on top of GRU probs.",
+)
+urban_delta = st.sidebar.slider(
+    "Urbanization delta (pp)", -5.0, 10.0, 0.0, 0.5, key="whatif_urban_delta"
+)
+pop_mult = st.sidebar.slider(
+    "Population multiplier", 0.8, 1.5, 1.0, 0.05, key="whatif_pop_mult"
+)
+
+predict_now = st.sidebar.button("Predict Now", type="primary")
+if predict_now:
+    st.session_state["use_whatif"] = True
+
+_whatif_active = bool(st.session_state.get("use_whatif", False))
 
 # =====================================================
 # Load forecast data
@@ -262,13 +321,22 @@ except Exception as e:
 # Build date
 df["date"] = pd.to_datetime(df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2) + "-01")
 
+# GRU softmax columns: coerce so what-if and KPIs never see NaN/object dtypes from CSV
+for _c in ("p_low", "p_mod", "p_high", "p_extreme"):
+    if _c in df.columns:
+        df[_c] = pd.to_numeric(df[_c], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+_sprob = df["p_low"] + df["p_mod"] + df["p_high"] + df["p_extreme"]
+_sprob = np.maximum(np.asarray(_sprob, dtype=np.float64), 1e-12)
+for _c in ("p_low", "p_mod", "p_high", "p_extreme"):
+    df[_c] = df[_c] / _sprob
+
 # base outputs
 df["risk_name"] = df["pred_risk"].map(RISK_LABELS)
 df["expected_risk"] = expected_risk_from_probs(df, df["p_low"], df["p_mod"], df["p_high"], df["p_extreme"])
 
-# What-if view (df_view)
+# What-if view (df_view): after **Predict Now**, heuristic rescoring of GRU probs using slider deltas
 df_view = df.copy()
-if st.session_state["use_whatif"]:
+if _whatif_active:
     df_view = apply_whatif_rescore(df_view, temp_delta, urban_delta, pop_mult)
     df_view["pred_risk_view"] = df_view["pred_risk_adj"]
     df_view["risk_name_view"] = df_view["risk_name_adj"]
@@ -291,8 +359,8 @@ else:
 # =====================================================
 st.title(" Urban Heat Stress Risk Forecasting – Pakistan")
 st.markdown("""
-**End-to-end ML decision-support system** for forecasting urban heat stress risk  
-Includes: model comparison, explainability (SHAP), feature importance, interactive what-if simulation, and city risk monitoring.
+**Deep learning decision-support system** — bidirectional **GRU + attention** over multi-month sequences (default weights **`gru_attn_best.pkl`**) for urban heat stress risk.  
+Forecasts come from the **GRU**; the dashboard adds scenario comparison, what-if rescoring, and city-level monitoring.
 """)
 
 # =====================================================
@@ -361,16 +429,18 @@ if len(scenario_data) > 1:
         "to flip from 'High' to 'Extreme' classification."
     )
 
-if st.session_state["use_whatif"]:
-    st.info("What-if mode is ON. Click **Reset What-if** in the sidebar to revert to baseline.")
+if _whatif_active:
+    st.info(
+        "**What-if mode** — **heuristic** rescoring of the GRU’s saved class probabilities using your slider values. "
+        "Click **Reset What-if** in the sidebar to turn off what-if and return sliders to neutral (0 °C, 0 pp, 1.0× pop)."
+    )
 
 # Warning for long-term forecasts
 if horizon >= 12:
     st.warning(
-        "⚠️ **Long-term Forecast Limitation**: This model projects seasonal patterns forward but stabilizes into "
-        "repeating 12-month cycles due to recursive forecasting with lag features. Use for seasonal planning "
-        "(identifying which months are risky) rather than specific year predictions. Expected risk increases with "
-        "warming scenarios, but extreme month counts may remain stable due to learned seasonal patterns and threshold effects."
+        "⚠️ **Long-term forecast limitation**: The **GRU** is rolled forward month-by-month with projected climate and "
+        "recursive heat-index features, so long horizons tend toward repeating seasonal structure. Use for **which months** "
+        "are riskiest and for **scenario deltas** (+1°C / +2°C), not for exact year-to-year ranking."
     )
 
 st.divider()
@@ -393,15 +463,32 @@ map_df = (
 map_df["lat"] = map_df["city"].map(lambda c: CITY_COORDS.get(c, (np.nan, np.nan))[0])
 map_df["lon"] = map_df["city"].map(lambda c: CITY_COORDS.get(c, (np.nan, np.nan))[1])
 map_df = map_df.dropna(subset=["lat", "lon"])
-map_df["color"] = map_df["risk"].map(RISK_COLORS)
+# Colour by **continuous** mean expected risk — not worst discrete class — so what-if and prob shifts show visually.
+_rgb = map_df["avg_risk"].astype(float).map(expected_risk_to_rgb)
+map_df["r"] = _rgb.map(lambda x: x[0])
+map_df["g"] = _rgb.map(lambda x: x[1])
+map_df["b"] = _rgb.map(lambda x: x[2])
+map_df["a"] = 235
+# Geographic radius (meters) for data-driven *relative* size; **radius_max_pixels** caps on-screen blob size
+# (PyDeck / deck.gl often defaults to meters — huge pixel radii were drawn as giant red plates).
+map_df["circle_radius_m"] = (
+    1200.0 + map_df["max_extreme"].astype(float) * 8000.0 + map_df["avg_risk"].astype(float) * 900.0
+).clip(800.0, 12000.0)
 
 layer = pdk.Layer(
     "ScatterplotLayer",
     map_df,
     get_position=["lon", "lat"],
-    get_radius="max_extreme * 50000 + 15000",
-    get_fill_color="color",
+    get_radius="circle_radius_m",
+    get_fill_color="[r, g, b, a]",
     pickable=True,
+    radius_units="meters",
+    radius_min_pixels=4,
+    radius_max_pixels=10,
+    stroked=True,
+    get_line_color=[25, 25, 25, 180],
+    line_width_min_pixels=1,
+    opacity=0.95,
 )
 
 view_state = pdk.ViewState(
@@ -411,20 +498,37 @@ view_state = pdk.ViewState(
     pitch=0,
 )
 
+_deck_key = f"deck_{horizon}_{scenario}_{_whatif_active}_{temp_delta:.4f}_{urban_delta:.4f}_{pop_mult:.4f}_{map_df['circle_radius_m'].sum():.1f}"
 st.pydeck_chart(
     pdk.Deck(
         layers=[layer],
         initial_view_state=view_state,
-        tooltip={"text": "{city}\nAvg risk: {avg_risk}\nMax P(extreme): {max_extreme}"},
-    )
+        tooltip={
+            "text": (
+                "{city}\n"
+                "Avg expected risk (0–3): {avg_risk}\n"
+                "Max P(extreme): {max_extreme}\n"
+                "Worst predicted bin (0–3): {risk}"
+            )
+        },
+    ),
+    key=_deck_key,
+)
+st.caption(
+    "**Colour** = **average expected risk** (probability-weighted 0–3), so it updates under what-if even when the worst **class** stays Extreme. "
+    "Dot size is capped (~4–10 px). **Scenario** dropdown loads different GRU CSVs (+1 °C etc.); what-if is a fast heuristic on the current file."
 )
 
 st.divider()
 
 # =====================================================
-# SECTION 2 — TOP CITIES TABLE + INSIGHTS
+# SECTION 2 — TOP CITIES TABLE + INSIGHTS (GRU)
 # =====================================================
-st.header("Top Cities at Risk")
+st.header("Top cities at risk (GRU)")
+st.caption(
+    "Ranked from **GRU** forecast rows for the selected **horizon** and **climate scenario** "
+    + ("(with **what-if** rescoring applied)." if _whatif_active else "(loaded CSV).")
+)
 
 top = (
     df_view.groupby("city")
@@ -436,7 +540,19 @@ top = (
     .sort_values("avg_expected_risk", ascending=False)
 )
 
+FIG_DIR.mkdir(parents=True, exist_ok=True)
+_top_cities_path = FIG_DIR / f"top_cities_gru_{horizon}m_{scenario}.csv"
+top.to_csv(_top_cities_path)
+st.caption(f"Written: **`{_top_cities_path.relative_to(ROOT)}`** (refreshes when you change horizon, scenario, or what-if).")
+
 st.dataframe(top.style.background_gradient(cmap="Reds"), use_container_width=True)
+st.download_button(
+    label="Download top cities (GRU CSV)",
+    data=top.to_csv().encode("utf-8"),
+    file_name=f"top_cities_gru_{horizon}m_{scenario}.csv",
+    mime="text/csv",
+    key="dl_top_cities_gru",
+)
 
 st.markdown("### Key Insights (Auto)")
 st.write(f"- **Highest average expected risk:** {top.index[0]} (avg={top.iloc[0]['avg_expected_risk']:.2f})")
@@ -686,62 +802,87 @@ st.header("Model Performance & Selection")
 
 metrics = load_metrics()
 if metrics is None:
-    st.warning("model_metrics.csv not found. Generate it from your evaluation script.")
+    st.warning(
+        "`outputs/figures/model_metrics.csv` not found. From `heat-risk-pk` run: `python -m src.evaluate` "
+        f"(evaluates **GRU** `models/{SEQUENCE_CHECKPOINT_NAME}` on the held-out test period)."
+    )
 else:
+    st.subheader("Test metrics (`model_metrics.csv`)")
     st.dataframe(metrics, use_container_width=True)
 
+if "forecast_model" in df.columns:
+    ck = str(df["forecast_checkpoint"].iloc[0]) if "forecast_checkpoint" in df.columns else ""
+    st.caption(f"Loaded forecast rows: **{df['forecast_model'].iloc[0]}** (`{ck}`).")
+
 st.markdown("""
-**Model Selection Criteria**
-- Primary: **Macro-F1** (handles class imbalance)
-- Safety-critical: **Extreme-class Recall**
-- Selected model: **Climate-only Gradient Boosting / HGB (deployed for forecast)**
+**Deployed model (deep learning)**  
+- **Architecture:** bidirectional **GRU** + attention pooling + city embedding → softmax over 4 risk classes (`RNNAttentionClassifier` in `src/lstm_risk_model.py`).  
+- **Inputs:** `seq_len` consecutive months of scaled numeric features per city (same schema as `notebooks/deep_learning_model_selection.ipynb`).  
+- **Selection (offline):** validation **macro-F1** with early stopping; **test** metrics in the table above.  
+- **Artifacts:** **`models/gru_attn_best.pkl`** (via **`SEQUENCE_CHECKPOINT_NAME`**). Forecasts: `python -m src.forecast` (`src/forecast_lstm.py`).
 """)
 
-# notes = load_model_notes()
-# if notes is not None:
-#     with st.expander("Model Notes (metrics.json)"):
-#         st.json(notes)
+st.subheader("Confusion matrix (GRU, test set)")
+_cm_path = FIG_DIR / "confusion_matrix_sequence.png"
+if not _cm_path.exists():
+    _cm_path = FIG_DIR / "confusion_matrix_lstm.png"
+safe_image(_cm_path, "GRU + Attention — normalized confusion matrix (held-out years)")
 
-st.subheader("Confusion Matrices")
-cm_cols = st.columns(3)
-for i, img in enumerate([
-    "confusion_matrix_baseline.png",
-    "confusion_matrix_logreg.png",
-    "confusion_matrix_hgb.png",
-]):
-    p = FIG_DIR / img
-    with cm_cols[i]:
-        safe_image(p, img)
+with st.expander("Optional: tabular sklearn baselines (different feature contract)"):
+    st.markdown(
+        "Logistic regression / HGB were trained on **single-row** `feature_cols_forecast` features. "
+        "They are not the GRU forecaster. Regenerate with `python -m src.evaluate --tabular` → `outputs/figures/tabular_baselines/`."
+    )
+    tdir = FIG_DIR / "tabular_baselines"
+    cm_cols = st.columns(3)
+    for i, img in enumerate(
+        ["confusion_matrix_baseline.png", "confusion_matrix_logreg.png", "confusion_matrix_hgb.png"]
+    ):
+        p = tdir / img
+        with cm_cols[i]:
+            safe_image(p, img)
 
 st.divider()
 
 # =====================================================
 # SECTION 6 — FEATURE IMPORTANCE
 # =====================================================
-st.header("Feature Contribution Analysis")
+st.header("Feature contribution (GRU)")
 
-c1, c2 = st.columns(2)
+_sal_path = FIG_DIR / "sequence_feature_saliency_top15.png"
+if not _sal_path.exists():
+    _sal_path = FIG_DIR / "lstm_feature_saliency_top15.png"
+safe_image(
+    _sal_path,
+    "Input × gradient saliency on the **GRU** (top features, test subsample — run `python -m src.evaluate` to refresh).",
+)
 
-with c1:
-    safe_image(FIG_DIR / "perm_importance_forecast_hgb_top15.png",
-               "Permutation Importance (Deployed Forecast Model)")
-
-with c2:
-    safe_image(FIG_DIR / "rf_feature_importance_top15.png",
-               "Random Forest Feature Importance")
+with st.expander("Legacy tree-model feature rankings (not the GRU)"):
+    c1, c2 = st.columns(2)
+    with c1:
+        safe_image(
+            FIG_DIR / "perm_importance_forecast_hgb_top15.png",
+            "Permutation importance (HGB on tabular forecast features)",
+        )
+    with c2:
+        safe_image(FIG_DIR / "rf_feature_importance_top15.png", "Random Forest feature importance")
 
 st.divider()
 
 # =====================================================
 # SECTION 7 — SHAP EXPLAINABILITY
 # =====================================================
-st.header("Model Explainability (SHAP)")
+st.header("Explainability (SHAP — legacy tabular models)")
 
+st.caption(
+    "These plots are from **tree/linear explainers** on single-month tabular models, not from the **GRU**. "
+    "For the GRU, use the **input–gradient saliency** figure above or the DL notebook (Kernel SHAP on the torch model)."
+)
 s1, s2 = st.columns(2)
 with s1:
-    safe_image(FIG_DIR / "shap_summary_extreme.png", "Global SHAP Summary – Extreme Risk")
+    safe_image(FIG_DIR / "shap_summary_extreme.png", "Global SHAP summary (legacy tabular)")
 with s2:
-    safe_image(FIG_DIR / "shap_waterfall_example.png", "Local SHAP Explanation – Single City-Month")
+    safe_image(FIG_DIR / "shap_waterfall_example.png", "Local SHAP waterfall (legacy tabular)")
 
 st.divider()
 
@@ -752,8 +893,8 @@ with st.expander("Model Limitations & Proper Interpretation"):
     st.markdown("""
     ### Understanding Long-Term Forecast Behavior
     
-    This forecasting model uses **recursive prediction** with lag features (previous months' heat and risk levels). 
-    While this approach works well for short-term forecasts (6-12 months), it has important limitations for longer horizons:
+    The **GRU** is applied in **recursive** mode for forecasts: each new month updates the sliding window of scaled features 
+    and heat-stress lags. That works well for near-term horizons; long horizons inherit limitations:
     
     #### Why Forecasts Stabilize Into Repeating Patterns
     
