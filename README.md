@@ -353,9 +353,3 @@ streamlit run heat-risk-pk/app/app.py
 - Extensions: CMIP6 forcings, explicit **year** or trend features, probabilistic calibration, larger architectures or ensembles.
 
 ---
-
-## Author
-
-- Muhammad Abdullah Waqar
-
-Supplementary PDF (if included in your copy): `heat-risk-pk/ML_Project_Final_Report.pdf`.
