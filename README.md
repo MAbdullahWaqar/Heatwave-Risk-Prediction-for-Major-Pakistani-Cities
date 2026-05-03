@@ -139,10 +139,7 @@ Located under `heat-risk-pk/data/raw/`:
 
 Column z-scores are computed within the frame at HSI construction time in `add_heat_index`:
 
-\[
-\text{HSI} = 0.40\,z_{\text{tavg}} + 0.30\,z_{\text{tmax}} + 0.15\,z_{\text{surf}} + 0.10\,z_{\text{pop}} + 0.10\,z_{\text{urb}} - 0.05\,z_{\text{wind}}
-\]
-
+**HSI (plain):** 0.40·z(tavg) + 0.30·z(tmax) + 0.15·z(surf) + 0.10·z(pop) + 0.10·z(urb) − 0.05·z(wind)
 Wind speed is **median-filled** before z-scoring to reduce sensitivity to missing anemometer stretches.
 
 ### 5.2 Ordinal mapping
