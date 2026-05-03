@@ -1,15 +1,3 @@
-# Urban Heat Stress Risk Forecasting for Major Pakistani Cities
-
-**Technical README (extended, target ~2000 lines)** — End-to-end **deep learning** system for **monthly ordinal heat-risk classification** (Low → Moderate → High → Extreme) across major Pakistani cities, with **twelve-month sequence modeling**, **scenario-based forward projections**, and a **Streamlit** operations dashboard.
-
-**Default production model:** bidirectional **GRU** + **learned attention** over time + **per-city embeddings** + MLP head, exported as `heat-risk-pk/models/gru_attn_best.pkl` from `heat-risk-pk/notebooks/deep_learning_model_selection.ipynb`.
-
-**Repository role:** This document is written for **capstone assessment**, **portfolio review**, and **stakeholder onboarding**. It states the **problem**, **methods**, **results**, **comparisons**, **reproduction**, **file structure**, **rationale for choices**, **limitations**, and **potential impact** with explicit attention to trade-offs, negative results, and honest interpretation.
-
-**Document conventions:** Code paths are rooted at the repository top unless stated otherwise. Constants such as split years and min-history thresholds refer to `heat-risk-pk/src/config.py` as the single source of truth. When this README disagrees with code, **trust the code** and open an issue or update the README in the same pull request as the behavioral change.
-
-**Reading map for assessors:** Skim Sections 1–3 for intent, Sections 4–8 for data and problem formulation, Sections 9–12 for modeling and evidence, Sections 13–16 for deployment artifacts, and Appendix A for a dense rationale catalog suitable for “why did you choose X?” interviews.
-
 ---
 
 ## Table of contents
@@ -1995,9 +1983,8 @@ Forecasts under `heat-risk-pk/outputs/forecasts/` follow `forecast_{H}m_{scenari
 
 ---
 
-## Authoring and citation notes
 
-Developed as **CS-245 Capstone** work: **Urban Heat Stress Risk Forecasting — Pakistan**. Cite data sources (World Bank, station datasets, surface temperature product) appropriately in academic submissions.
+Developed as **CS-419 Capstone** work: **Urban Heat Stress Risk Forecasting — Pakistan**. 
 
 ---
 
