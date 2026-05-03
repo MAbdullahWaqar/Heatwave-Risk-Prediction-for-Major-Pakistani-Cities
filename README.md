@@ -1,4 +1,6 @@
----
+# Urban Heat Stress Risk Forecasting for Major Pakistani Cities
+
+End-to-end **deep learning** pipeline for **monthly ordinal heat-risk** (Low → Extreme), **12-month sequences**, **scenario forecasts**, and a **Streamlit** dashboard. See **Table of contents** below.
 
 ## Table of contents
 
