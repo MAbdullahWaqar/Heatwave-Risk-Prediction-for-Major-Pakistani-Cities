@@ -1,0 +1,5 @@
+class_id,class_name,data_share_pct,support,accuracy,recall,precision,error_rate,notes
+0,Low,38.9,96,0.9757085020242915,0.9791666666666666,0.9591836734693877,0.02083333333333337,Lowest-risk class; often confused around seasonal transitions.
+1,Moderate,22.7,56,0.9271255060728745,0.7857142857142857,0.88,0.2142857142857143,Intermediate class with widest overlap to Low/High.
+2,High,17.8,44,0.9271255060728745,0.8636363636363636,0.76,0.13636363636363635,Boundary overlap with Moderate and Extreme months.
+3,Extreme,20.6,51,0.9757085020242915,0.9215686274509803,0.9591836734693877,0.07843137254901966,Critical class; extreme-event detection quality.
